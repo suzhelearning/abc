@@ -233,11 +233,14 @@ license text.
 Please cite this work as
 
 ```
-@article{abc2026,
-  title   = {Scalable Behavior Cloning with Open Data, Training, and Evaluation},
-  author  = {Allshire, Arthur and Singh, Himanshu Gaurav and Singh, Ritvik and Rashid, Adam and Choi, Hongsuk and McAllister, David and Yu, Justin and Chen, Yiyuan and Huang, Huang and Abbeel, Pieter and Chen, Xi and Duan, Rocky and Isola, Phillip and Malik, Jitendra and Shentu, Fred and Shi, Guanya and Wu, Philipp and Kanazawa, Angjoo},
-  year    = {2026},
-  journal = {arXiv preprint},
-  url = {https://abc.bot/},
+@misc{abc2026,
+  title         = {Scalable Behavior Cloning with Open Data, Training, and Evaluation},
+  author        = {Arthur Allshire and Himanshu Gaurav Singh and Ritvik Singh and Adam Rashid and Hongsuk Choi and David McAllister and Justin Yu and Yiyuan Chen and Huang Huang and Pieter Abbeel and Xi Chen and Rocky Duan and Phillip Isola and Jitendra Malik and Fred Shentu and Guanya Shi and Philipp Wu and Angjoo Kanazawa},
+  year          = {2026},
+  eprint        = {2606.27375},
+  archivePrefix = {arXiv},
+  primaryClass  = {cs.RO},
+  doi           = {10.48550/arXiv.2606.27375},
+  url           = {https://arxiv.org/abs/2606.27375},
 }
 ```
