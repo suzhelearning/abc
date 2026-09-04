@@ -126,7 +126,9 @@ per-side validity, and MuJoCo `mjSTATE_FULLPHYSICS`. A 30 Hz index and its
 nominal grid ordinal reference those rows without duplicating or re-encoding
 the source data; dropped grid rows cannot be crossed by a training window.
 Policy labels are always future actual MuJoCo qpos; teleoperation targets are
-audit data only.
+audit data only. Training normalization is train-only and fail-closed: a
+persisted file must contain finite, positive-std 54-D qpos/action vectors;
+malformed statistics are rejected before Dataset or training access.
 
 ```bash
 uv run spd-validate-episode cache/spd/train/episode_0001.hdf5 --checksums

@@ -72,6 +72,12 @@ Accepted targets are also rate-limited from URDF joint velocity limits at the
 - `training/contact_eligible` and `training/segments_30hz` remove only
   continuous hand-object-free spans longer than 10 seconds from training;
   raw rows and an audit list remain intact.
+- The persisted normalization artifact is either absent (identity for smoke
+  use) or exactly four finite 54-D vectors (`qpos/action` mean/std); standard
+  deviations must be positive and float32-representable.
+- Vendor signed-millisecond timestamps are accepted only after conversion to
+  a positive, non-overflowing tracking nanosecond timestamp; corrupt values
+  are dropped rather than clamped into a fresh-looking sample.
 - Publication is staging-file → structural validation → atomic rename.
 
 Zenoh process keys have fixed payload sizes: `spd/vr/v1/tracking` is 1,540
