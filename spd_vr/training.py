@@ -202,9 +202,12 @@ def train(config: SPDTrainConfig) -> None:
     output.mkdir(parents=True, exist_ok=True)
     norm_path = root / "normalization.json"
     if norm_path.exists():
-        normalization = validate_normalization(
-            json.loads(norm_path.read_text(encoding="utf-8"))
-        )
+        persisted = json.loads(norm_path.read_text(encoding="utf-8"))
+        if persisted is None or (isinstance(persisted, dict) and not persisted):
+            raise ValueError(
+                f"{norm_path} must contain the complete train-only normalization mapping"
+            )
+        normalization = validate_normalization(persisted)
     else:
         normalization = compute_normalization(train_root)
         norm_path.write_text(json.dumps(normalization, indent=2), encoding="utf-8")
