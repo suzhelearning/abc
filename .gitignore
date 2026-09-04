@@ -1,8 +1,16 @@
 __pycache__/
 *.pyc
 .venv/
+build/
+*.egg-info/
 .uv/
 cache/
 uv.lock
+# Vendor-supplied Tianji/Wuji2 meshes stay local until redistribution terms
+# are explicitly confirmed.  Keep only the non-sensitive install metadata in
+# the public branch; publish model bytes only with an intentional `git add -f`.
+assets/tianji_wuji2/*
+!assets/tianji_wuji2/README.md
+!assets/tianji_wuji2/SHA256SUMS
 checkpoints/
 outputs/

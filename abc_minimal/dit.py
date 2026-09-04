@@ -16,6 +16,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from abc_minimal.config import ClipConfig, DiTConfig
+from abc_minimal.flow import flow_interpolate
 
 # CLIP ViT-B/32 text encoder.
 
@@ -795,7 +796,9 @@ class DiTPolicy(nn.Module):
             prefix_mask_expanded = None
             t_per_pos = t
 
-        x_t = (1 - t_per_pos) * actions + t_per_pos * noise
+        x_t, u_t = flow_interpolate(
+            actions, noise, t_per_pos, data_at_one=False
+        )
         if prefix_noise_scale > 0.0 and prefix_mask_expanded is not None:
             x_t = x_t + prefix_mask_expanded.float() * torch.randn_like(x_t) * prefix_noise_scale
 
@@ -804,7 +807,6 @@ class DiTPolicy(nn.Module):
         c = self.compute_cond(state, batch["task_vec_clip"], t_cond)
         v_t = self.predict_velocity(x_t, c, vision_tokens)
 
-        u_t = noise - actions
         if prefix_mask_expanded is not None:
             postfix_mask = ~prefix_mask_expanded
             masked_loss = ((u_t - v_t) ** 2) * postfix_mask.float()

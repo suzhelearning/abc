@@ -18,7 +18,7 @@ Code for the ABC project.
 
 ## Release Roadmap
 - [x] June 17 -- Release Minimal Training Pipeline
-- [ ] End of June -- Release all sim data 
+- [ ] End of June -- Release all sim data
 - [ ] By end of July -- full code release
 
 ## Setup
@@ -39,6 +39,212 @@ cd abc
 uv python pin 3.12
 uv sync
 ```
+
+## SPD-VR branch: PICO to a 54-DoF digital twin
+
+The `spd-vr` branch adds a simulation-only adaptation of *Pre-training Visual
+Dexterity in Simulation* for PICO 4 Ultra, Tianji dual arms, and Wuji2 dual
+hands. It keeps ABC's DINOv3 implementation, image preprocessing,
+flow-matching primitive, distributed training structure, and MuJoCo-Warp
+adapter. It does not load an ABC 14-DoF checkpoint and has no language input or
+real-robot output.
+
+The arm process uses one persistent OSQP Jacobian velocity QP per side with
+URDF position/velocity bounds. The PICO wrist's joint[1] pose must remain
+stable for ten frames before either QP may publish a target. The policy order
+is fixed and independent of URDF/MJCF storage order:
+
+```text
+left arm 7 + left hand 20 + right arm 7 + right hand 20 = 54 DoF
+```
+
+Build the MuJoCo plant from the authoritative URDF. The normal command uses
+CoACD collision proxies and fails closed if a proxy misses its surface gate.
+At present the vendor `Link_Base.STL` proxy is about 36.8 mm at p95 versus the
+3 mm gate, so a contact-qualified build is still blocked. `--raw-collisions`
+is only a display/control smoke mode because MuJoCo treats each raw mesh as a
+convex hull.
+
+The public branch does not redistribute the vendor Tianji-Wuji2 URDF or STL
+bytes.  Place an authorized local bundle under `assets/tianji_wuji2/` and
+verify `SHA256SUMS` before running model compilation or simulation tests; the
+directory's README records the publication restriction.
+
+```bash
+uv run spd-model \
+  --urdf assets/tianji_wuji2/tianji_wuji2.urdf \
+  --output generated/spd_vr \
+  --cache cache/spd_collision
+
+# Development smoke build only:
+uv run spd-model \
+  --urdf assets/tianji_wuji2/tianji_wuji2.urdf \
+  --output /tmp/spd_vr_raw --raw-collisions
+
+# Contact-data gate (raw builds fail here by design):
+uv run spd-model --verify --verify-contact \
+  --urdf assets/tianji_wuji2/tianji_wuji2.urdf \
+  --output generated/spd_vr
+```
+
+For a quick two-terminal smoke test, run the PICO bridge and the combined live
+loop below. The production-shaped three-window launcher separates the 200 Hz
+arm-IK process from the 60 Hz viewer: only the viewer owns the complete
+MuJoCo plant, while the arm process publishes the 272-byte arm-target frame.
+
+```bash
+uv run spd-vr-live \
+  --model generated/spd_vr/unified_plant.xml \
+  --arm-model generated/spd_vr/arm_ik.xml \
+  --viewer --record-to cache/spd/train/episode_0001.hdf5
+
+uv run spd-pico-bridge --sdk-library /path/to/libpxrea.so
+
+# Three windows: viewer (Zenoh router + plant), arm_ik, pxrea_bridge.
+scripts/start_spd_vr.sh --detach \
+  --model generated/spd_vr/unified_plant.xml \
+  --arm-model generated/spd_vr/arm_ik.xml \
+  --sdk-library /path/to/libpxrea.so
+# If multiple PICO devices are online, add --serial <device-id>.
+scripts/start_spd_vr.sh --status
+scripts/stop_spd_vr.sh
+```
+
+The optional `spd-control pause|resume|realign|reset|shutdown` command sends
+the 40-byte versioned control frame to all three processes. Pause freezes the
+viewer physics and recorder; reset/epoch changes require a fresh neutral
+alignment before arm targets become valid.
+
+Each HDF5 episode contains the full raw 60 Hz stream: actual 54-D qpos/qvel
+and `raw/action/qpos`, the 54-D teleoperation target, three 224×168 RGB and instance-segmentation
+views, raw PICO hands and source/bridge timestamps plus scale/epoch/sequence
+metadata, MuJoCo-derived object/contact records and hand-object contact flags,
+per-side validity, and MuJoCo `mjSTATE_FULLPHYSICS`. A 30 Hz index and its
+nominal grid ordinal reference those rows without duplicating or re-encoding
+the source data; dropped grid rows cannot be crossed by a training window.
+Policy labels are always future actual MuJoCo qpos; teleoperation targets are
+audit data only.
+
+```bash
+uv run spd-validate-episode cache/spd/train/episode_0001.hdf5 --checksums
+uv run spd-filter-contacts \
+  cache/spd/train/episode_0001.hdf5 \
+  cache/spd/train/episode_0001.contact-filtered.hdf5
+uv run torchrun --standalone --nproc-per-node 8 train_spd.py \
+  --dataset-root cache/spd
+# Resume a saved SPD run (model/EMA/optimizers/RNG and DINO hash are checked):
+uv run torchrun --standalone --nproc-per-node 8 train_spd.py \
+  --dataset-root cache/spd --resume cache/spd_checkpoints/last.pt
+```
+
+Contact filtering never deletes the raw stream.  It adds
+`training/contact_eligible` and `[start,end)` `training/segments_30hz`; any
+continuous hand-object-free span longer than ten seconds becomes a hard
+segment boundary.  The manifest records the removed raw spans and their
+timestamps.  The Dataset consumes these segments, so a 258-row sample cannot
+bridge a filtered interval.
+
+The paper's six scenes and 17 task registry is deterministic and produces a
+reset manifest with seeded object pose, mass, friction, color, and contact
+metadata.  Build a scene model on top of a verified plant, then pass its scene
+manifest to the live recorder:
+
+```bash
+uv run spd-scene --list
+uv run spd-scene --scene jenga --task hollow_tower --seed 7 \
+  --base-model generated/spd_vr/unified_plant.xml \
+  --output-model generated/spd_vr/jenga_hollow_tower.xml
+uv run spd-vr-live \
+  --model generated/spd_vr/jenga_hollow_tower.xml \
+  --arm-model generated/spd_vr/arm_ik.xml \
+  --scene-manifest generated/spd_vr/jenga_hollow_tower.scene.json \
+  --record-to cache/spd/train/jenga_0001.hdf5
+```
+
+For recording, keep the scene XML beside the verified compiler artifacts
+(`model_manifest.yaml` and `collision_manifest.yaml`); the live preflight
+checks both manifests before opening HDF5.
+
+Before opening the three-window process graph, an optional read-only preflight
+checks the PICO/RoboticsService ADB reverse entry, vendor SDK, Python
+dependencies, display, generated artifacts, Zenoh endpoint, and managed tmux
+session.  Add `--require-contact` (or use it automatically with recording) to
+also enforce the CoACD contact gate:
+
+```bash
+uv run spd-vr-preflight --manifest generated/spd_vr/model_manifest.yaml \
+  --urdf assets/tianji_wuji2/tianji_wuji2.urdf --require-contact
+scripts/start_spd_vr.sh --preflight --record-to cache/spd/train/episode.hdf5
+```
+
+The command is read-only with respect to ADB: it uses `adb reverse --list` and
+never mutates device forwarding.  `--fake-source` replaces the hardware SDK
+for protocol/CI smoke, but does not waive artifact or contact checks.
+
+The bounded acceptance set is also read-only.  It validates all registered
+scene resets, the generated model/contact gate, and (when supplied) every HDF5
+episode with checksums; `--replay` additionally restores full MuJoCo state:
+
+```bash
+uv run spd-vr-acceptance --seed-count 3 --episodes cache/spd/train \
+  --manifest generated/spd_vr/model_manifest.yaml \
+  --urdf assets/tianji_wuji2/tianji_wuji2.urdf --require-contact --replay
+```
+
+No `--episodes` means the data portion is reported as not requested.  Passing
+an empty episode directory, a malformed episode, an unqualified collision
+manifest, or a replay/model hash mismatch returns non-zero.
+
+For a simulation-only real-time diagnostic (no HDF5 publication), run:
+
+```bash
+uv run spd-sim-benchmark --model generated/spd_vr/unified_plant.xml \
+  --urdf assets/tianji_wuji2/tianji_wuji2.urdf --duration 5 --render
+```
+
+It reports p50/p95/p99 control-tick latency against the 60 Hz budget and
+explicitly does not waive the collision, hardware, or policy gates.
+
+Once the licensed official DINOv3 checkpoint and target GPU are available, the
+full streaming policy benchmark records the checkpoint hash and cached-action
+latency. It does not download weights or fall back to ABC/tiny checkpoints:
+
+```bash
+uv run spd-policy-benchmark \
+  --dino-checkpoint cache/dinov3_vitb16_pretrain_lvd1689m.pth \
+  --device cuda:0 --measure-ticks 64 --compile
+```
+
+Add `--enforce-deadline` only after reviewing the target-GPU run; a missing
+checkpoint or unavailable CUDA device returns a structured non-zero error.
+
+Replay restores the recorded `mjSTATE_FULLPHYSICS` rows and checks qpos/qvel,
+state tolerance, optional hand-object contacts, and (with `--render`) camera
+availability against the same model hash:
+
+```bash
+uv run spd-replay-episode cache/spd/train/jenga_0001.hdf5 \
+  --model generated/spd_vr/jenga_hollow_tower.xml \
+  --urdf assets/tianji_wuji2/tianji_wuji2.urdf
+```
+
+One SPD training example spans 258 consecutive 30 Hz rows: one true previous
+row, 256 observation rows, and the farthest future label at `+256`. The model
+trains all 32 eight-action chunks in parallel with a causal 32-timestep window,
+a frozen DINOv3 ViT-B/16, four pooled tokens per camera, an 8-block observation
+trunk, an independently parameterized 8-block action expert, Muon/AdamW, and a
+20-step-half-life EMA. The 54-D model is about 223M parameters. Deployment
+appends observation/projection KV at every 30 Hz tick, retains the matching
+32-timestep window, and uses 10 Euler steps to emit each eight-action chunk.
+
+The main implementation lives in `spd_vr/`; `abc_minimal/` remains the released
+ABC baseline except for the shared direction-explicit flow helper.
+
+Training-time visual randomization is disabled by default and can be enabled
+with `--visual-randomization-probability` (instance-segmentation keyed color
+replacement). Left/right symmetry is also opt-in with
+`--symmetry-probability` plus a reviewed `--symmetry-spec-path`; the required
+joint-axis sign table is never inferred automatically.
 
 ## Training
 
@@ -216,6 +422,13 @@ cases. Bundled license texts live under `abc_minimal/third_party/`.
 | [DINOv3](https://github.com/facebookresearch/dinov3) | DINOv3 License (Meta) | [`abc_minimal/third_party/dinov3/LICENSE.md`](abc_minimal/third_party/dinov3/LICENSE.md) | Adapted (`abc_minimal/dit.py`); pretrained weights downloaded by the user | ViT-B/16 vision backbone (`DinoRope`, `DinoAttention`, `DinoMlp`, etc.) |
 | [OpenAI CLIP](https://github.com/openai/CLIP) | MIT | [`abc_minimal/third_party/clip/LICENSE`](abc_minimal/third_party/clip/LICENSE) | Adapted (`abc_minimal/dit.py`); ViT-B/32 text weights + BPE vocab downloaded at runtime | CLIP text encoder + BPE tokenizer (`CLIPBPETokenizer`, `CLIPTextTower`, `CLIPTextEmbedder`) |
 | [i2rt YAM](https://github.com/i2rt-robotics) | MIT | [`assets/put_bottles/assets/i2rt_yam/LICENSE`](assets/put_bottles/assets/i2rt_yam/LICENSE) | Vendored under `assets/put_bottles/assets/i2rt_yam/` | YAM robot MuJoCo model, meshes, and scene assets |
+| Wuji retargeting | MIT | [`abc_minimal/third_party/wuji-retargeting/LICENSE`](abc_minimal/third_party/wuji-retargeting/LICENSE) | Vendored as the small Python runtime under `wuji_retargeting/` | PICO hand keypoints to Wuji2 20-DoF joint targets |
+
+The Tianji-Wuji2 URDF/STL bundle under `assets/tianji_wuji2/` is hardware-vendor
+material supplied for this research integration. Its redistribution terms are
+not declared in this repository; confirm them before publishing or
+redistributing the asset bundle. See [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)
+for the publication gate and the complete provenance table.
 
 ### DINOv3 use restrictions
 

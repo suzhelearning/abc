@@ -1,0 +1,16 @@
+optimizer:
+  type: AdaptiveOptimizerAnalytical
+  urdf_path: ../../assets/tianji_wuji2/tianji_wuji2.urdf
+  active_joint_names:
+    [r_thumb_cmc_flex, r_thumb_cmc_abd, r_thumb_mcp, r_thumb_ip,
+     r_index_finger_mcp_flex, r_index_finger_mcp_abd, r_index_finger_pip, r_index_finger_dip,
+     r_middle_finger_mcp_flex, r_middle_finger_mcp_abd, r_middle_finger_pip, r_middle_finger_dip,
+     r_ring_finger_mcp_flex, r_ring_finger_mcp_abd, r_ring_finger_pip, r_ring_finger_dip,
+     r_pinky_mcp_flex, r_pinky_mcp_abd, r_pinky_pip, r_pinky_dip]
+  link_naming:
+    {prefix: r_, palm: wrist, fingers: [thumb, index_finger, middle_finger, ring_finger, pinky],
+     pip: "{finger}_middle", dip: "{finger}_distal", tip: "{finger}_tip", link1: "{finger}_proximal_abd"}
+retarget:
+  {huber_delta: 2.0, huber_delta_dir: 0.5, norm_delta: 0.04, w_pos: 1.0,
+   w_dir: 2.0, scaling: 1.0, w_full_hand: 1.0, thumb_skip_pip: false,
+   w_hyper: 1.0, soft_min: 0.0, w_couple: 0.1, couple_ratio: 0.7, lp_alpha: 0.2}
