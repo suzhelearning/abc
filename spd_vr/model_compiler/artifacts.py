@@ -389,7 +389,19 @@ def _calibration(model_path: Path, joint_order: tuple[str, ...]) -> dict[str, An
     data = mujoco.MjData(model)
     mujoco.mj_forward(model, data)
     mass = np.zeros((model.nv, model.nv), dtype=float)
-    mujoco.mj_fullM(model, mass, data.qM)
+    # MuJoCo 3.3 exposes the sparse mass vector as ``data.qM`` and accepts
+    # ``mj_fullM(model, dst, qM)``.  MuJoCo 3.12 removed that public field and
+    # changed the binding to ``mj_fullM(model, data, dst)``.  Keep calibration
+    # artifacts portable across both supported runtimes instead of pinning
+    # model compilation to one Python binding layout.
+    qM = getattr(data, "qM", None)
+    if qM is not None:
+        try:
+            mujoco.mj_fullM(model, mass, qM)
+        except TypeError:
+            mujoco.mj_fullM(model, data, mass)
+    else:
+        mujoco.mj_fullM(model, data, mass)
     actuators = []
     for index, joint_name in enumerate(joint_order):
         joint_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, joint_name)
