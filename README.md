@@ -61,7 +61,10 @@ left arm 7 + left hand 20 + right arm 7 + right hand 20 = 54 DoF
 Build the MuJoCo plant from the authoritative URDF. The normal command uses
 CoACD collision proxies and fails closed if a proxy misses its surface gate.
 At present the vendor `Link_Base.STL` proxy is about 36.8 mm at p95 versus the
-3 mm gate, so a contact-qualified build is still blocked. `--raw-collisions`
+3 mm gate, so a contact-qualified build is still blocked. After safe mesh
+processing the file still has about 79,405 vertices across 46 disconnected
+components; bounded CoACD trials at 128 and 256 pieces remain about 12.3 mm and
+8.9 mm p95 (merge disabled: about 2,610 pieces and 8.0 mm). `--raw-collisions`
 is only a display/control smoke mode because MuJoCo treats each raw mesh as a
 convex hull.
 
