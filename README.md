@@ -113,6 +113,11 @@ scripts/start_spd_vr.sh --status
 scripts/stop_spd_vr.sh
 ```
 
+For a repeatable three-process protocol smoke, replace the SDK option with
+`--fake-source-jsonl <events.jsonl> --wait-for-shutdown`; the bridge then stays
+alive after replay until `uv run spd-control shutdown` is sent. This mode is
+for simulation/CI only and does not represent PICO hardware availability.
+
 The optional `spd-control pause|resume|realign|reset|shutdown` command sends
 the 40-byte versioned control frame to all three processes. Pause freezes the
 viewer physics and recorder; reset/epoch changes require a fresh neutral

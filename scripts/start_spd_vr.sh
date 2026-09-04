@@ -14,6 +14,7 @@ right_hand_config="$repo_root/spd_vr/config/wuji2_pico_right.yaml"
 sdk_library="${PXREA_SDK_LIBRARY:-${PXREA_SDK_ROOT:-/opt/apps/roboticsservice/SDK}/x64/libPXREARobotSDK.so}"
 serial=""
 fake_source=""
+wait_for_shutdown=0
 record_to=""
 scene_manifest=""
 mode="detach"
@@ -39,6 +40,7 @@ Start options:
   --sdk-library PATH       PXREA shared library
   --serial ID               select one PICO/PXREA device when more than one is online
   --fake-source-jsonl PATH replay callback frames instead of loading PXREA
+  --wait-for-shutdown       keep a fake source alive until spd-control shutdown
   --scene-manifest PATH    deterministic SPD scene JSON
   --record-to PATH         atomic HDF5 episode output
   --preflight              run read-only PICO, dependency, artifact, and port checks before tmux
@@ -66,6 +68,7 @@ while (($#)); do
     --sdk-library) need_value "$@"; sdk_library="$2"; shift 2 ;;
     --serial) need_value "$@"; serial="$2"; shift 2 ;;
     --fake-source-jsonl) need_value "$@"; fake_source="$2"; shift 2 ;;
+    --wait-for-shutdown) wait_for_shutdown=1; shift ;;
     --scene-manifest) need_value "$@"; scene_manifest="$2"; shift 2 ;;
     --record-to) need_value "$@"; record_to="$2"; shift 2 ;;
     --preflight) run_preflight=1; shift ;;
@@ -106,7 +109,14 @@ arm_command=(uv run python -m spd_vr.arm_ik --model "$arm_model" --urdf "$urdf" 
 if [[ -n "$fake_source" ]]; then
   bridge_command=(uv run python -m spd_vr.pxrea_bridge --fake-source-jsonl "$fake_source" \
     --endpoint "$endpoint")
+  if ((wait_for_shutdown)); then
+    bridge_command+=(--wait-for-shutdown)
+  fi
 else
+  if ((wait_for_shutdown)); then
+    echo "--wait-for-shutdown is only valid with --fake-source-jsonl" >&2
+    exit 2
+  fi
   bridge_command=(uv run python -m spd_vr.pxrea_bridge --sdk-library "$sdk_library" \
     --endpoint "$endpoint")
 fi
