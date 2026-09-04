@@ -35,6 +35,23 @@ alone is therefore not evidence that a 3 mm proxy exists.  The default
 compiler still uses its fixed reproducible settings and rejects any artifact
 whose measured p95 exceeds the manifest gate.
 
+## Topology-repair trial
+
+Exact vertex welding and removal of unreferenced vertices reduce the source to
+`79,405` vertices while preserving `158,982` faces and exposing `46`
+connected components.  Processing those components independently did not
+solve the approximation error:
+
+- one convex hull per component measured `112.7 mm` p95 at 2,048 samples;
+- representative component-isolated CoACD runs measured about `5.8 mm`,
+  `7.99 mm`, and `2.02 mm` p95 at 2,048/4,096 samples;
+- some thin components returned zero-volume hulls, which are rejected by the
+  production artifact validator.
+
+The repair is useful for diagnosing the vendor STL but is not applied silently
+by the compiler: changing the source topology would change the source hash and
+must be accompanied by a vendor-approved collision asset and a new manifest.
+
 ## Reproducibility
 
 Run the bounded experiments from the repository root with the synchronized
