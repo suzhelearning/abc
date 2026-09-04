@@ -68,6 +68,10 @@ components; bounded CoACD trials at 128 and 256 pieces remain about 12.3 mm and
 is only a display/control smoke mode because MuJoCo treats each raw mesh as a
 convex hull.
 
+Additional bounded high-budget results, source hash, and the exact quality
+measurement definition are recorded in
+[`docs/spd_vr_collision_diagnostics.md`](docs/spd_vr_collision_diagnostics.md).
+
 The public branch does not redistribute the vendor Tianji-Wuji2 URDF or STL
 bytes.  Place an authorized local bundle under `assets/tianji_wuji2/` and
 verify `SHA256SUMS` before running model compilation or simulation tests; the
