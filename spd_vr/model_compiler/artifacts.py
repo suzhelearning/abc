@@ -750,6 +750,18 @@ def verify_contact_qualified(
         raise ArtifactError("raw collision meshes are not contact-qualified")
     if not settings:
         raise ArtifactError("collision manifest settings are empty")
+    thresholds = document.get("surface_p95_thresholds_m")
+    if (
+        not isinstance(thresholds, Mapping)
+        or set(thresholds) != {"arm_base", "hands"}
+        or isinstance(thresholds.get("arm_base"), bool)
+        or isinstance(thresholds.get("hands"), bool)
+        or not isinstance(thresholds.get("arm_base"), (int, float))
+        or not isinstance(thresholds.get("hands"), (int, float))
+        or not np.isclose(float(thresholds["arm_base"]), 0.003)
+        or not np.isclose(float(thresholds["hands"]), 0.0015)
+    ):
+        raise ArtifactError("collision surface threshold policy is missing or changed")
     records = document.get("records")
     if not isinstance(records, list) or not records:
         raise ArtifactError("collision manifest has no collision records")
@@ -793,6 +805,12 @@ def verify_contact_qualified(
                 f"collision surface p95 exceeds gate for {record.get('link')}: "
                 f"{p95!r} > {threshold!r}"
             )
+        expected_threshold = 0.0015 if re.search(r"(?:hand|thumb|finger|palm)", link, re.IGNORECASE) else 0.003
+        if not np.isclose(float(threshold), expected_threshold):
+            raise ArtifactError(
+                f"collision threshold policy differs for {link}[{collision_index}]: "
+                f"{threshold!r} != {expected_threshold!r}"
+            )
         source_filename = record.get("source_filename")
         source_sha256 = record.get("source_sha256")
         if not isinstance(source_filename, str) or not _is_sha256(source_sha256):
@@ -811,6 +829,20 @@ def verify_contact_qualified(
             or piece_count != len(pieces)
         ):
             raise ArtifactError(f"collision pieces are malformed: {link}[{collision_index}]")
+        metrics = record.get("metrics")
+        if metrics is not None:
+            if not isinstance(metrics, Mapping):
+                raise ArtifactError(f"collision metrics are malformed: {link}[{collision_index}]")
+            if metrics.get("piece_count") != piece_count:
+                raise ArtifactError(f"collision metrics piece_count disagrees: {link}[{collision_index}]")
+            metric_p95 = metrics.get("surface_p95_m")
+            if (
+                isinstance(metric_p95, bool)
+                or not isinstance(metric_p95, (int, float))
+                or not np.isfinite(float(metric_p95))
+                or not np.isclose(float(metric_p95), float(p95), rtol=1e-9, atol=1e-12)
+            ):
+                raise ArtifactError(f"collision metrics surface p95 disagrees: {link}[{collision_index}]")
         for piece in pieces:
             if (
                 not isinstance(piece, Mapping)
@@ -824,6 +856,19 @@ def verify_contact_qualified(
             piece_path = _resolve_child_path(path.parent, piece["file"])
             if not piece_path.is_file() or _sha256(piece_path) != piece["sha256"]:
                 raise ArtifactError(f"collision piece hash mismatch: {piece.get('file')}")
+    if source is not None:
+        expected_records = {
+            (link.name, index)
+            for link in load_urdf(source).links
+            for index, _geometry in enumerate(link.collisions)
+        }
+        if seen_records != expected_records:
+            missing = sorted(expected_records - seen_records)
+            extra = sorted(seen_records - expected_records)
+            raise ArtifactError(
+                f"collision records do not match the authoritative URDF: "
+                f"missing={missing[:8]} extra={extra[:8]}"
+            )
     return {
         "path": str(path),
         "records": len(records),
