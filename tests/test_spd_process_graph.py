@@ -1,5 +1,7 @@
 import numpy as np
 from types import SimpleNamespace
+from pathlib import Path
+import subprocess
 
 from spd_vr.arm_ik import DualArmIKController
 from spd_vr.alignment import SideAlignment
@@ -282,3 +284,39 @@ def test_episode_state_machine_guards_contact_and_supports_revert_pause_skip():
     assert controller.state is EpisodeState.IDLE
     assert simulation.paused is False
     assert recorder.discarded == ["operator_skip"]
+
+
+def test_three_window_launcher_fake_source_shutdown_option_is_wired():
+    """Keep the reproducible CI process graph separate from the SDK path."""
+    script = Path(__file__).resolve().parents[1] / "scripts" / "start_spd_vr.sh"
+    result = subprocess.run(
+        [
+            str(script),
+            "--dry-run",
+            "--fake-source-jsonl",
+            "/tmp/spd-events.jsonl",
+            "--wait-for-shutdown",
+            "--model",
+            "/tmp/unified.xml",
+            "--arm-model",
+            "/tmp/arm.xml",
+            "--urdf",
+            "/tmp/robot.urdf",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "pxrea_bridge:" in result.stdout
+    assert "--fake-source-jsonl /tmp/spd-events.jsonl" in result.stdout
+    assert "--wait-for-shutdown" in result.stdout
+
+    rejected = subprocess.run(
+        [str(script), "--dry-run", "--wait-for-shutdown"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert rejected.returncode == 2
+    assert "only valid with --fake-source-jsonl" in rejected.stderr
