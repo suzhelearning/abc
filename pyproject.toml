@@ -53,6 +53,11 @@ spd-vr-acceptance = "spd_vr.acceptance:main"
 spd-sim-benchmark = "spd_vr.simulation:benchmark_main"
 spd-policy-benchmark = "spd_vr.policy_benchmark:main"
 
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+]
+
 [build-system]
 requires = ["setuptools>=75"]
 build-backend = "setuptools.build_meta"
