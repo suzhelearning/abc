@@ -3,7 +3,7 @@ import pytest
 torch = pytest.importorskip("torch")
 
 from spd_vr.config import SPDModelConfig
-from spd_vr.policy import SPDPolicy, parameter_summary
+from spd_vr.policy import SPDPolicy, load_spd_checkpoint, parameter_summary
 
 
 class TinyVision(torch.nn.Module):
@@ -155,3 +155,66 @@ def test_load_dino_rejects_nonfinite_or_nonfloating_parameters(tmp_path, mutate)
     torch.save({"model": state}, path)
     with pytest.raises(ValueError, match="invalid_values"):
         model.load_dino(path)
+
+
+def _tiny_policy():
+    config = SPDModelConfig(
+        hidden_size=32,
+        depth=2,
+        num_heads=4,
+        mlp_ratio=2,
+        vision_queries=2,
+        vit_embed_dim=32,
+        vit_depth=1,
+        vit_num_heads=4,
+        vision_pool_num_heads=4,
+        vision_pool_mlp_ratio=2,
+    )
+    return SPDPolicy(config, vision_backbone=TinyVision(32))
+
+
+def _slim_checkpoint(model):
+    return {
+        "model": {
+            name: value.detach().clone()
+            for name, value in model.state_dict().items()
+            if not name.startswith("img_backbone.")
+        },
+        "ema": {
+            "model": {
+                name: value.detach().clone()
+                for name, value in model.named_parameters()
+                if value.requires_grad and not name.startswith("img_backbone.")
+            }
+        },
+    }
+
+
+def test_load_spd_checkpoint_requires_complete_slim_model(tmp_path):
+    model = _tiny_policy()
+    checkpoint = _slim_checkpoint(model)
+    checkpoint["model"].pop("qpos_embedding.weight")
+    path = tmp_path / "partial.pt"
+    torch.save(checkpoint, path)
+    with pytest.raises(ValueError, match="slim model keys"):
+        load_spd_checkpoint(model, path, use_ema=False)
+
+
+def test_load_spd_checkpoint_rejects_embedded_dino_weights(tmp_path):
+    model = _tiny_policy()
+    checkpoint = _slim_checkpoint(model)
+    checkpoint["model"]["img_backbone.projection.weight"] = torch.zeros(32, 3)
+    path = tmp_path / "embedded-dino.pt"
+    torch.save(checkpoint, path)
+    with pytest.raises(ValueError, match="must not embed"):
+        load_spd_checkpoint(model, path, use_ema=False)
+
+
+def test_load_spd_checkpoint_accepts_complete_model_and_ema(tmp_path):
+    model = _tiny_policy()
+    checkpoint = _slim_checkpoint(model)
+    path = tmp_path / "complete.pt"
+    torch.save(checkpoint, path)
+    loaded = load_spd_checkpoint(model, path, use_ema=False)
+    assert loaded["model"]
+    load_spd_checkpoint(model, path, use_ema=True)

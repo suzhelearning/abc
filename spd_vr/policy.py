@@ -894,21 +894,55 @@ def load_spd_checkpoint(
         raise ValueError("SPD checkpoint contains no model weights")
     ema_container = checkpoint.get("ema")
     ema_state = ema_container.get("model") if isinstance(ema_container, dict) else None
-    source = ema_state if use_ema and isinstance(ema_state, dict) and ema_state else model_state
-    if not isinstance(source, dict) or not source:
-        raise ValueError("SPD checkpoint contains no model weights")
     current = model.state_dict()
-    unexpected = sorted(set(source) - set(current))
-    if unexpected:
-        raise ValueError(f"checkpoint has incompatible keys: {unexpected[:8]}")
+    slim_keys = {name for name in current if not name.startswith("img_backbone.")}
+    if any(name.startswith("img_backbone.") for name in model_state):
+        raise ValueError("SPD checkpoint must not embed frozen DINOv3 weights")
+    missing_model = sorted(slim_keys - set(model_state))
+    unexpected_model = sorted(set(model_state) - slim_keys)
+    if missing_model or unexpected_model:
+        raise ValueError(
+            "checkpoint has incompatible slim model keys: "
+            f"missing={missing_model[:8]} unexpected={unexpected_model[:8]}"
+        )
+
+    source: Mapping[str, Any]
+    if use_ema and isinstance(ema_state, dict) and ema_state:
+        trainable_keys = {
+            name
+            for name, parameter in model.named_parameters()
+            if parameter.requires_grad and not name.startswith("img_backbone.")
+        }
+        missing_ema = sorted(trainable_keys - set(ema_state))
+        unexpected_ema = sorted(set(ema_state) - trainable_keys)
+        if missing_ema or unexpected_ema:
+            raise ValueError(
+                "checkpoint has incompatible EMA keys: "
+                f"missing={missing_ema[:8]} unexpected={unexpected_ema[:8]}"
+            )
+        source = ema_state
+    else:
+        source = model_state
     shape_mismatch = [
         name
         for name, value in source.items()
         if not isinstance(value, torch.Tensor)
         or tuple(value.shape) != tuple(current[name].shape)
     ]
-    if shape_mismatch:
-        raise ValueError(f"checkpoint has incompatible tensor shapes: {shape_mismatch[:8]}")
+    invalid_values = sorted(
+        name
+        for name, value in source.items()
+        if isinstance(value, torch.Tensor)
+        and (
+            not value.is_floating_point()
+            or not torch.isfinite(value).all().item()
+        )
+    )
+    if shape_mismatch or invalid_values:
+        raise ValueError(
+            "checkpoint has incompatible tensors: "
+            f"shapes={shape_mismatch[:8]} invalid_values={invalid_values[:8]}"
+        )
     current.update(source)
     model.load_state_dict(current, strict=True)
     return checkpoint
