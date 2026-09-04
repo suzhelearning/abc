@@ -1,6 +1,7 @@
 import numpy as np
 import json
 from pathlib import Path
+import pytest
 
 from spd_vr.augment import SymmetrySpec, augment_trajectory
 from spd_vr.scenes.registry import SCENES, TASKS
@@ -35,6 +36,47 @@ def test_scene_manifest_validates_task_and_object_provenance(tmp_path):
         encoding="utf-8",
     )
     assert load_scene_manifest(path)["task"] == spec.qualified_name
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("mass_kg", "not-a-number", "mass_kg"),
+        ("position", [0.0, 0.0], "position"),
+        ("geoms", [], "geoms"),
+    ],
+)
+def test_scene_manifest_rejects_malformed_object_reset_fields(tmp_path, field, value, message):
+    spec = TASKS[0]
+    result = spec.reset(4)
+    document = {
+        "schema_version": "spd-vr-scene-v1",
+        "task": spec.qualified_name,
+        "reset": result.manifest(),
+        "object_bodies": [item.name for item in result.objects],
+    }
+    document["reset"]["objects"][0][field] = value
+    path = tmp_path / f"malformed-{field}.json"
+    path.write_text(json.dumps(document), encoding="utf-8")
+    with pytest.raises(ValueError, match=message):
+        load_scene_manifest(path)
+
+
+def test_scene_manifest_rejects_duplicate_geom_names(tmp_path):
+    spec = TASKS[0]
+    result = spec.reset(4)
+    document = {
+        "schema_version": "spd-vr-scene-v1",
+        "task": spec.qualified_name,
+        "reset": result.manifest(),
+        "object_bodies": [item.name for item in result.objects],
+    }
+    objects = document["reset"]["objects"]
+    objects[1]["geoms"][0]["name"] = objects[0]["geoms"][0]["name"]
+    path = tmp_path / "duplicate-geom.json"
+    path.write_text(json.dumps(document), encoding="utf-8")
+    with pytest.raises(ValueError, match="duplicate scene geom"):
+        load_scene_manifest(path)
 
 
 def test_symmetry_transform_is_consistent_for_labels_and_wrist_views():
