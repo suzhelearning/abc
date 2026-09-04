@@ -94,10 +94,16 @@ def validate_normalization(
             raise ValueError(f"normalization[{key}] must contain finite values")
         # Dataset arithmetic is float32; reject values that would overflow
         # during that conversion instead of producing an Inf at __getitem__.
-        if not np.all(np.isfinite(numeric.astype(np.float32))):
+        float32 = numeric.astype(np.float32)
+        if not np.all(np.isfinite(float32)):
             raise ValueError(f"normalization[{key}] exceeds float32 range")
-        if key.endswith("_std") and np.any(numeric <= 0.0):
-            raise ValueError(f"normalization[{key}] must be strictly positive")
+        if key.endswith("_std"):
+            if np.any(numeric <= 0.0):
+                raise ValueError(f"normalization[{key}] must be strictly positive")
+            if np.any(float32 <= 0.0):
+                raise ValueError(
+                    f"normalization[{key}] must remain positive in float32"
+                )
         result[key] = numeric.tolist()
     return result
 

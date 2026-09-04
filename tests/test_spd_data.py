@@ -61,6 +61,9 @@ def test_normalization_requires_finite_positive_54d_vectors():
     invalid_std = dict(valid, qpos_std=[0.0] * 54)
     with pytest.raises(ValueError, match="strictly positive"):
         validate_normalization(invalid_std)
+    underflow_std = dict(valid, action_std=[1e-50] * 54)
+    with pytest.raises(ValueError, match="positive in float32"):
+        validate_normalization(underflow_std)
     invalid_values = dict(valid, action_std=[float("nan")] * 54)
     with pytest.raises(ValueError, match="finite"):
         validate_normalization(invalid_values)
