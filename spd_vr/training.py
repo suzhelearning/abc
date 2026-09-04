@@ -19,7 +19,12 @@ from torch.utils.data import DataLoader, DistributedSampler
 
 from .config import SPDTrainConfig, validate_spd_model_config
 from .contracts import ROBOT_DOF
-from .data import SPDSequenceDataset, scan_episodes, validate_episode
+from .data import (
+    SPDSequenceDataset,
+    scan_episodes,
+    validate_episode,
+    validate_normalization,
+)
 from .policy import SPDPolicy, load_spd_checkpoint, parameter_summary
 
 
@@ -68,13 +73,13 @@ def compute_normalization(root: str | Path) -> dict[str, list[float]]:
     mean = total / count
     variance = np.maximum(squared / count - np.square(mean), 1e-12)
     std = np.sqrt(variance)
-    return {
+    return validate_normalization({
         "qpos_mean": mean.tolist(),
         "qpos_std": std.tolist(),
         # SPD actions are future actual qpos, so they share the exact statistic.
         "action_mean": mean.tolist(),
         "action_std": std.tolist(),
-    }
+    })
 
 
 class EMA:
@@ -197,7 +202,9 @@ def train(config: SPDTrainConfig) -> None:
     output.mkdir(parents=True, exist_ok=True)
     norm_path = root / "normalization.json"
     if norm_path.exists():
-        normalization = json.loads(norm_path.read_text(encoding="utf-8"))
+        normalization = validate_normalization(
+            json.loads(norm_path.read_text(encoding="utf-8"))
+        )
     else:
         normalization = compute_normalization(train_root)
         norm_path.write_text(json.dumps(normalization, indent=2), encoding="utf-8")

@@ -40,6 +40,66 @@ IMAGE_HEIGHT = 168
 IMAGE_WIDTH = 224
 WINDOW_SPAN = HISTORY_STEPS + 2  # prior row through furthest +8 label.
 _MAX_SIGNED_TIMESTAMP_NS = 0x7FFFFFFFFFFFFFFF
+_NORMALIZATION_KEYS = tuple(
+    f"{prefix}_{suffix}"
+    for prefix in ("qpos", "action")
+    for suffix in ("mean", "std")
+)
+
+
+def validate_normalization(
+    value: Mapping[str, Sequence[float]] | None,
+) -> dict[str, list[float]]:
+    """Validate the four-vector train-only normalization contract.
+
+    An omitted mapping means identity normalization for interactive/synthetic
+    use.  Once a mapping is supplied, accepting a missing key or a scalar
+    would silently broadcast a wrong statistic across all 54 joints, so the
+    persisted training artifact is deliberately exact and fail-closed.
+    """
+    if value is None:
+        return {}
+    if not isinstance(value, Mapping):
+        raise ValueError("normalization must be a mapping")
+    if not value:
+        return {}
+    expected = set(_NORMALIZATION_KEYS)
+    keys = set(value)
+    missing = sorted(expected - keys)
+    unexpected = sorted(keys - expected)
+    if missing or unexpected:
+        details = []
+        if missing:
+            details.append(f"missing={missing}")
+        if unexpected:
+            details.append(f"unexpected={unexpected}")
+        raise ValueError(
+            "normalization keys must be exactly qpos/action mean/std ("
+            + ", ".join(details)
+            + ")"
+        )
+
+    result: dict[str, list[float]] = {}
+    for key in _NORMALIZATION_KEYS:
+        try:
+            raw = np.asarray(value[key])
+        except Exception as exc:
+            raise ValueError(f"normalization[{key}] must be a numeric 54-vector") from exc
+        if raw.shape != (ROBOT_DOF,) or raw.dtype.kind not in {"i", "u", "f"}:
+            raise ValueError(
+                f"normalization[{key}] must be a numeric vector of shape ({ROBOT_DOF},)"
+            )
+        numeric = raw.astype(np.float64, copy=False)
+        if not np.all(np.isfinite(numeric)):
+            raise ValueError(f"normalization[{key}] must contain finite values")
+        # Dataset arithmetic is float32; reject values that would overflow
+        # during that conversion instead of producing an Inf at __getitem__.
+        if not np.all(np.isfinite(numeric.astype(np.float32))):
+            raise ValueError(f"normalization[{key}] exceeds float32 range")
+        if key.endswith("_std") and np.any(numeric <= 0.0):
+            raise ValueError(f"normalization[{key}] must be strictly positive")
+        result[key] = numeric.tolist()
+    return result
 
 
 def _timestamp_array(value: Sequence[int] | np.ndarray, name: str) -> np.ndarray:
@@ -860,7 +920,7 @@ class SPDSequenceDataset:
         self.episodes = scan_episodes(root)
         if not self.episodes:
             raise ValueError(f"no HDF5 episodes found under {root}")
-        self.normalization = dict(normalization or {})
+        self.normalization = validate_normalization(normalization)
         if not 0.0 <= float(symmetry_probability) <= 1.0:
             raise ValueError("symmetry_probability must be in [0,1]")
         if symmetry_probability and symmetry_spec is None:
@@ -1006,5 +1066,6 @@ __all__ = [
     "filter_contact_mask",
     "scan_episodes",
     "sequence_indices",
+    "validate_normalization",
     "validate_episode",
 ]

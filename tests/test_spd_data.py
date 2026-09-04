@@ -13,6 +13,7 @@ from spd_vr.data import (
     build_contact_segments,
     filter_contact_mask,
     sequence_indices,
+    validate_normalization,
     validate_episode,
 )
 from spd_vr.replay import replay_episode
@@ -38,6 +39,31 @@ def test_contact_filter_removes_only_runs_longer_than_ten_seconds_and_splits_gri
         build_contact_segments(np.array([0, 2, 3]), np.ones(3, dtype=np.bool_)),
         np.array([[0, 1], [1, 3]], dtype=np.int64),
     )
+
+
+def test_normalization_requires_finite_positive_54d_vectors():
+    valid = {
+        "qpos_mean": np.zeros(54, dtype=np.float64),
+        "qpos_std": np.ones(54, dtype=np.float64),
+        "action_mean": np.zeros(54, dtype=np.float64),
+        "action_std": np.ones(54, dtype=np.float64),
+    }
+    normalized = validate_normalization(valid)
+    assert set(normalized) == set(valid)
+    assert len(normalized["qpos_mean"]) == 54
+    assert validate_normalization(None) == {}
+
+    with pytest.raises(ValueError, match="keys must be exactly"):
+        validate_normalization({"qpos_mean": [0.0] * 54})
+    invalid_shape = dict(valid, action_mean=[0.0] * 53)
+    with pytest.raises(ValueError, match=r"shape \(54,"):
+        validate_normalization(invalid_shape)
+    invalid_std = dict(valid, qpos_std=[0.0] * 54)
+    with pytest.raises(ValueError, match="strictly positive"):
+        validate_normalization(invalid_std)
+    invalid_values = dict(valid, action_std=[float("nan")] * 54)
+    with pytest.raises(ValueError, match="finite"):
+        validate_normalization(invalid_values)
 
 
 def _cameras():

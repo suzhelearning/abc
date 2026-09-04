@@ -51,6 +51,8 @@ _LIFECYCLE_TYPES = {
     PXREA_DEVICE_MISSING,
     PXREA_DEVICE_CONNECT,
 }
+_MAX_TRACKING_SOURCE_TIMESTAMP_NS = 0x7FFFFFFFFFFFFFFF
+_MAX_PICO_TIMESTAMP_MS = _MAX_TRACKING_SOURCE_TIMESTAMP_NS // 1_000_000
 
 
 @dataclass(frozen=True)
@@ -207,11 +209,19 @@ class BridgeCore:
                 self.reset_device(device_id)
             if pair is None:
                 continue
+            # The inner PICO framing uses signed int64 for compatibility with
+            # the vendor stream, while the published tracking contract is a
+            # strictly positive nanosecond timestamp.  Reject invalid or
+            # overflowing values here instead of clamping them to 1 ns (which
+            # could turn a corrupt frame into an apparently fresh sample).
+            if not 0 < pair.timestamp_ms <= _MAX_PICO_TIMESTAMP_MS:
+                self._invalid_payloads += 1
+                continue
             self._sequence += 1
             tracking = TrackingFrame(
                 sequence=self._sequence,
                 tracking_epoch=self._epoch,
-                source_timestamp_ns=max(1, pair.timestamp_ms * 1_000_000),
+                source_timestamp_ns=pair.timestamp_ms * 1_000_000,
                 bridge_monotonic_ns=max(1, int(self._clock_ns())),
                 left_active=pair.left.active,
                 right_active=pair.right.active,

@@ -2,6 +2,8 @@ import ctypes
 import json
 import struct
 
+import pytest
+
 from spd_vr.pico_frames import FRAME_TYPE_HAND_LEFT, FRAME_TYPE_HAND_RIGHT
 from spd_vr.pxrea_bridge import BridgeCore
 from spd_vr.pxrea_sdk import (
@@ -27,6 +29,14 @@ def test_bridge_pairs_vendor_frames_without_a_zenoh_listener():
     frame = decode_tracking(packets[0])
     assert frame.bridge_monotonic_ns == 100
     assert frame.tracking_epoch == core.epoch
+
+
+@pytest.mark.parametrize("timestamp", [0, -1, 9_223_372_036_855])
+def test_bridge_rejects_non_positive_or_overflowing_pico_timestamp(timestamp):
+    core = BridgeCore(selected_device_id="FAKE")
+    core.accept_event(("FAKE", _hand_frame(FRAME_TYPE_HAND_LEFT, timestamp)))
+    assert core.accept_event(("FAKE", _hand_frame(FRAME_TYPE_HAND_RIGHT, timestamp))) == []
+    assert core.status()["invalid_payloads"] == 1
 
 
 def test_bridge_drops_malformed_callback_event_without_worker_failure():
