@@ -382,10 +382,22 @@ class SPDPolicy(nn.Module):
                 or tuple(cleaned[name].shape) != tuple(parameter.shape)
             )
         )
-        if missing_parameters or shape_mismatch:
+        invalid_values = sorted(
+            name
+            for name, parameter in required.items()
+            if name in cleaned
+            and isinstance(cleaned[name], torch.Tensor)
+            and (
+                not cleaned[name].is_floating_point()
+                or not torch.isfinite(cleaned[name]).all().item()
+            )
+        )
+        if missing_parameters or shape_mismatch or invalid_values:
             raise ValueError(
                 "DINOv3 checkpoint is incompatible: "
-                f"missing={missing_parameters[:8]} shape_mismatch={shape_mismatch[:8]}"
+                f"missing={missing_parameters[:8]} "
+                f"shape_mismatch={shape_mismatch[:8]} "
+                f"invalid_values={invalid_values[:8]}"
             )
         missing, unexpected = target.load_state_dict(cleaned, strict=False)
         return list(missing), list(unexpected)

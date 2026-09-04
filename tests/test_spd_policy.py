@@ -126,3 +126,32 @@ def test_load_dino_strips_nested_wrapper_prefixes(tmp_path):
     missing, unexpected = model.load_dino(path)
     assert missing == []
     assert unexpected == []
+
+
+@pytest.mark.parametrize("mutate", ["nan", "integer"])
+def test_load_dino_rejects_nonfinite_or_nonfloating_parameters(tmp_path, mutate):
+    config = SPDModelConfig(
+        hidden_size=32,
+        depth=2,
+        num_heads=4,
+        mlp_ratio=2,
+        vision_queries=2,
+        vit_embed_dim=32,
+        vit_depth=1,
+        vit_num_heads=4,
+        vision_pool_num_heads=4,
+        vision_pool_mlp_ratio=2,
+    )
+    model = SPDPolicy(config, vision_backbone=TinyVision(32))
+    state = {
+        name: value.detach().clone()
+        for name, value in model.img_backbone.state_dict().items()
+    }
+    if mutate == "nan":
+        state["projection.weight"].fill_(float("nan"))
+    else:
+        state["projection.weight"] = state["projection.weight"].to(torch.int64)
+    path = tmp_path / f"dino_{mutate}.pth"
+    torch.save({"model": state}, path)
+    with pytest.raises(ValueError, match="invalid_values"):
+        model.load_dino(path)
