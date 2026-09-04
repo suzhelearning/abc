@@ -38,6 +38,8 @@ sudo apt-get install -y ffmpeg     # on Linux
 cd abc
 uv python pin 3.12
 uv sync
+# Run the SPD-VR regression suite (pytest is in the dev dependency group).
+uv run pytest -q tests
 ```
 
 ## SPD-VR branch: PICO to a 54-DoF digital twin
