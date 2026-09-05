@@ -187,6 +187,35 @@ def test_episode_writer_rejects_a_segment_shorter_than_one_spd_window(tmp_path, 
     assert not list(tmp_path.glob("*.staging"))
 
 
+def test_episode_writer_publishes_a_complete_spd_window_atomically(tmp_path, monkeypatch):
+    output = tmp_path / "usable.hdf5"
+    writer = EpisodeWriter(output, {"scene": "synthetic-contact"}, require_usable_training=True)
+    monkeypatch.setattr(
+        data_module,
+        "filter_contact_mask",
+        lambda timestamps, contacts, *, threshold_ns=0: (
+            np.ones(len(timestamps), dtype=np.bool_),
+            [],
+        ),
+    )
+    # 515 raw 60 Hz rows map to exactly 258 contiguous 30 Hz rows, which is
+    # the minimum span for one complete SPD sample.
+    for index in range(515):
+        writer.append(_frame(index))
+
+    writer.finish()
+    manifest = validate_episode(output, verify_checksums=True)
+    assert manifest["raw_frames"] == 515
+    assert manifest["training_frames"] == 258
+    assert manifest["contact_filter"]["training_eligible_frames"] == 258
+    with h5py.File(output, "r") as handle:
+        assert np.array_equal(
+            handle["training/segments_30hz"][:],
+            np.asarray([[0, 258]], dtype=np.int64),
+        )
+    assert not list(tmp_path.glob("*.staging"))
+
+
 def test_replay_structural_mode_validates_full_state_stream(tmp_path):
     output = tmp_path / "replay.hdf5"
     with EpisodeWriter(output, {"model_sha256": "not-checked-without-model"}) as writer:
