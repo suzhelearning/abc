@@ -195,6 +195,8 @@ defined in [`spd_vr_external_validation.md`](spd_vr_external_validation.md).
 Those gates remain fail-closed until their external evidence is archived. Once
 the records exist, `spd-vr-release-audit` checks the versioned evidence bundle
 and the exact DINO checkpoint without publishing or authorizing actuation.
+Its `safety_review` record is also required to declare the simulation-only
+boundary and explicit absence of follower commands.
 
 `spd-replay-episode` restores each recorded full-physics state and checks the
 same model hash, qpos/qvel tolerance, optional hand-object contact bit, and

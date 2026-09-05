@@ -20,6 +20,7 @@ from typing import Any, Mapping, Sequence
 from .collection_plan import validate_collection_plan
 from .evaluation import validate_evaluation_report
 from .policy_benchmark import validate_checkpoint_provenance
+from .safety import validate_safety_review
 
 
 SCHEMA_VERSION = 1
@@ -217,12 +218,11 @@ def _check_evaluation(
 
 
 def _check_safety(document: Mapping[str, Any]) -> ReleaseCheck:
-    if document.get("approved") is not True:
-        return ReleaseCheck("safety_review", False, "safety review is not approved")
-    scope = document.get("scope")
-    if not isinstance(scope, str) or not scope.strip():
-        return ReleaseCheck("safety_review", False, "safety review scope is missing")
-    return ReleaseCheck("safety_review", True, "approved scope is recorded")
+    try:
+        review = validate_safety_review(document)
+    except Exception as exc:
+        return ReleaseCheck("safety_review", False, str(exc))
+    return ReleaseCheck("safety_review", True, f"approved simulation-only scope: {review['scope']}")
 
 
 def audit_release(

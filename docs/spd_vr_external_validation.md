@@ -348,6 +348,12 @@ Wilson 95% intervals and is rejected if counts, intervals, metadata or task
 coverage are inconsistent. This tool does not run a policy or turn synthetic
 outcomes into release evidence.
 
+The `safety_review` entry must use `spd-vr-safety-review-v1` and explicitly
+record `simulation_only: true`, `physical_actuation_authorized: false`,
+`follower_commands_emitted: false`, reviewer/date, known hazards, one
+mitigation per hazard, and links to the reviewed evidence. An `approved` flag
+without these fields is rejected by the aggregate gate.
+
 Any future Tianji/Wuji2 fine-tune is a separate safety review. This repository
 does not emit follower commands, motor bus packets, emergency-stop calls or
 collision-safe physical trajectories; a successful simulation acceptance JSON

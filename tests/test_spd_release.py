@@ -6,6 +6,7 @@ from spd_vr.policy_benchmark import EXPECTED_DINO_MODEL_ID
 from spd_vr.release import audit_release
 from spd_vr.scenes.registry import TASK_REGISTRY
 from spd_vr.collection_plan import build_collection_plan
+from spd_vr.safety import SAFETY_REVIEW_SCHEMA
 
 
 def _write_json(path, value):
@@ -90,7 +91,20 @@ def _evidence(tmp_path):
     )
     _write_json(
         tmp_path / "safety.json",
-        {"approved": True, "scope": "simulation release only"},
+        {
+            "schema_version": SAFETY_REVIEW_SCHEMA,
+            "review_id": "review-001",
+            "reviewer": "reviewer",
+            "reviewed_at": "2026-09-05",
+            "scope": "simulation release only",
+            "approved": True,
+            "simulation_only": True,
+            "physical_actuation_authorized": False,
+            "follower_commands_emitted": False,
+            "known_hazards": ["stale_tracking"],
+            "mitigations": {"stale_tracking": "side-local HOLD"},
+            "evidence": {"acceptance": "acceptance.json"},
+        },
     )
     manifest = {
         "schema_version": 1,
