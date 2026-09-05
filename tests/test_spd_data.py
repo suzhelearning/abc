@@ -4,6 +4,8 @@ import h5py
 import numpy as np
 import pytest
 
+import spd_vr.data as data_module
+
 from spd_vr.contracts import CAMERA_NAMES
 from spd_vr.data import (
     CameraFrame,
@@ -139,6 +141,22 @@ def test_empty_episode_is_aborted_instead_of_published(tmp_path):
     output = tmp_path / "empty.hdf5"
     writer = EpisodeWriter(output, {})
     with pytest.raises(ValueError, match="empty episode"):
+        writer.finish()
+    assert not output.exists()
+    assert not list(tmp_path.glob("*.staging"))
+
+
+def test_episode_writer_can_require_usable_training_before_publish(tmp_path, monkeypatch):
+    output = tmp_path / "idle.hdf5"
+    writer = EpisodeWriter(output, {}, require_usable_training=True)
+    for index in range(3):
+        writer.append(_frame(index))
+
+    def no_eligible_rows(timestamps, contacts, *, threshold_ns=0):
+        return np.zeros(len(timestamps), dtype=np.bool_), []
+
+    monkeypatch.setattr(data_module, "filter_contact_mask", no_eligible_rows)
+    with pytest.raises(ValueError, match="usable contact-eligible training segment"):
         writer.finish()
     assert not output.exists()
     assert not list(tmp_path.glob("*.staging"))

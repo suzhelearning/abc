@@ -420,6 +420,7 @@ def run(args: argparse.Namespace) -> int:
                 "scene_manifest": scene_manifest,
             },
             overwrite=args.overwrite,
+            require_usable_training=args.require_usable_training,
         )
     stop = threading.Event()
     old_handlers: dict[int, Any] = {}
@@ -525,6 +526,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--scene-manifest", type=Path)
     parser.add_argument("--record-to", type=Path)
     parser.add_argument("--overwrite", action="store_true")
+    parser.add_argument(
+        "--require-usable-training",
+        action="store_true",
+        help="fail closed before publishing when no contact-eligible training segment exists",
+    )
     parser.add_argument("--viewer", action="store_true")
     return run(parser.parse_args(argv))
 

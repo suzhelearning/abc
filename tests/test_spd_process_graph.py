@@ -296,6 +296,9 @@ def test_three_window_launcher_fake_source_shutdown_option_is_wired():
             "--fake-source-jsonl",
             "/tmp/spd-events.jsonl",
             "--wait-for-shutdown",
+            "--require-usable-training",
+            "--record-to",
+            "/tmp/spd-episode.hdf5",
             "--model",
             "/tmp/unified.xml",
             "--arm-model",
@@ -311,6 +314,7 @@ def test_three_window_launcher_fake_source_shutdown_option_is_wired():
     assert "pxrea_bridge:" in result.stdout
     assert "--fake-source-jsonl /tmp/spd-events.jsonl" in result.stdout
     assert "--wait-for-shutdown" in result.stdout
+    assert "--require-usable-training" in result.stdout
 
     rejected = subprocess.run(
         [str(script), "--dry-run", "--wait-for-shutdown"],
@@ -329,3 +333,12 @@ def test_three_window_launcher_fake_source_shutdown_option_is_wired():
     )
     assert invalid_timeout.returncode == 2
     assert "--router-timeout must be a positive integer" in invalid_timeout.stderr
+
+    missing_record = subprocess.run(
+        [str(script), "--dry-run", "--require-usable-training"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert missing_record.returncode == 2
+    assert "requires --record-to" in missing_record.stderr

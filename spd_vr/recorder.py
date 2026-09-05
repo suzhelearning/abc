@@ -45,10 +45,12 @@ class EpisodeRecorder:
         output_root: str | Path,
         *,
         overwrite: bool = False,
+        require_usable_training: bool = False,
         manifest_defaults: Mapping[str, Any] | None = None,
     ) -> None:
         self.output_root = Path(output_root)
         self.overwrite = bool(overwrite)
+        self.require_usable_training = bool(require_usable_training)
         self.manifest_defaults = dict(manifest_defaults or {})
         self._writer: EpisodeWriter | None = None
         self.episode_path: Path | None = None
@@ -62,7 +64,12 @@ class EpisodeRecorder:
             raise RuntimeError("an episode is already recording")
         path = _episode_path(self.output_root, episode_id)
         manifest = {**self.manifest_defaults, **dict(task_manifest), "episode_id": str(episode_id)}
-        self._writer = EpisodeWriter(path, manifest, overwrite=self.overwrite)
+        self._writer = EpisodeWriter(
+            path,
+            manifest,
+            overwrite=self.overwrite,
+            require_usable_training=self.require_usable_training,
+        )
         self.episode_path = path
 
     def append(self, frame: RawFrame) -> None:

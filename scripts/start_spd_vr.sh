@@ -16,6 +16,7 @@ serial=""
 fake_source=""
 wait_for_shutdown=0
 record_to=""
+require_usable_training=0
 scene_manifest=""
 router_timeout=300
 mode="detach"
@@ -44,6 +45,7 @@ Start options:
   --wait-for-shutdown       keep a fake source alive until spd-control shutdown
   --scene-manifest PATH    deterministic SPD scene JSON
   --record-to PATH         atomic HDF5 episode output
+  --require-usable-training fail closed if the episode has no contact-eligible segment
   --router-timeout SEC     wait for the viewer Zenoh router before clients (default 300)
   --preflight              run read-only PICO, dependency, artifact, and port checks before tmux
 EOF
@@ -73,6 +75,7 @@ while (($#)); do
     --wait-for-shutdown) wait_for_shutdown=1; shift ;;
     --scene-manifest) need_value "$@"; scene_manifest="$2"; shift 2 ;;
     --record-to) need_value "$@"; record_to="$2"; shift 2 ;;
+    --require-usable-training) require_usable_training=1; shift ;;
     --router-timeout) need_value "$@"; router_timeout="$2"; shift 2 ;;
     --preflight) run_preflight=1; shift ;;
     --help|-h) usage; exit 0 ;;
@@ -136,6 +139,13 @@ if [[ -n "$scene_manifest" ]]; then
 fi
 if [[ -n "$record_to" ]]; then
   viewer_command+=(--record-to "$record_to")
+fi
+if ((require_usable_training)); then
+  if [[ -z "$record_to" ]]; then
+    echo "--require-usable-training requires --record-to" >&2
+    exit 2
+  fi
+  viewer_command+=(--require-usable-training)
 fi
 viewer_line="$(printf '%q ' "${viewer_command[@]}")"
 arm_line="$(printf '%q ' "${arm_command[@]}")"

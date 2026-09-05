@@ -79,6 +79,10 @@ Accepted targets are also rate-limited from URDF joint velocity limits at the
   a positive, non-overflowing tracking nanosecond timestamp; corrupt values
   are dropped rather than clamped into a fresh-looking sample.
 - Publication is staging-file → structural validation → atomic rename.
+- `EpisodeWriter(require_usable_training=True)` adds a formal-data gate before
+  the atomic rename; it rejects a recording with no contact-eligible training
+  segment. The live viewer, combined smoke entry, lifecycle recorder, and
+  three-window launcher expose this as `--require-usable-training`.
 
 Zenoh process keys have fixed payload sizes: `spd/vr/v1/tracking` is 1,540
 bytes, `spd/vr/v1/arm_targets` is 272 bytes, and `spd/vr/v1/control` is 40

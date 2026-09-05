@@ -197,6 +197,9 @@ also enforce the contact surface-quality gate:
 uv run spd-vr-preflight --manifest generated/spd_vr/model_manifest.yaml \
   --urdf assets/tianji_wuji2/tianji_wuji2.urdf --require-contact
 scripts/start_spd_vr.sh --preflight --record-to cache/spd/train/episode.hdf5
+# For a formal episode, fail before atomic publication if no usable segment exists:
+scripts/start_spd_vr.sh --preflight --record-to cache/spd/train/episode.hdf5 \
+  --require-usable-training
 ```
 
 The command is read-only with respect to ADB: it uses `adb reverse --list` and

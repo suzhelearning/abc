@@ -434,6 +434,7 @@ class EpisodeWriter:
         manifest: Mapping[str, Any],
         *,
         overwrite: bool = False,
+        require_usable_training: bool = False,
     ) -> None:
         self.output_path = Path(output_path)
         if self.output_path.suffix not in {".h5", ".hdf5"}:
@@ -442,6 +443,7 @@ class EpisodeWriter:
             if not overwrite or not self.output_path.is_file():
                 raise FileExistsError(self.output_path)
         self.output_path.parent.mkdir(parents=True, exist_ok=True)
+        self.require_usable_training = bool(require_usable_training)
         self.staging_path = self.output_path.with_name(
             f".{self.output_path.name}.{uuid.uuid4().hex}.staging"
         )
@@ -553,6 +555,10 @@ class EpisodeWriter:
             grid_step = _training_grid_steps(timestamps, train_index)
             contact_eligible = contact_keep[train_index]
             segments = build_contact_segments(grid_step, contact_eligible)
+            if self.require_usable_training and (
+                not np.any(contact_eligible) or segments.shape[0] == 0
+            ):
+                raise ValueError("no usable contact-eligible training segment")
             self._handle.create_dataset(
                 "training/index_30hz", data=train_index, dtype=np.int64
             )
