@@ -159,6 +159,11 @@ official DINOv3 checkpoint, records its SHA-256, measures streaming KV append
 and ten-step cached action sampling on the requested device, and never falls
 back to an ABC or tiny checkpoint.
 
+The hardware, vendor-license, target-CUDA, 8-GPU-resume, formal data, and
+release gates that cannot be established by these local diagnostics are
+defined in [`spd_vr_external_validation.md`](spd_vr_external_validation.md).
+Those gates remain fail-closed until their external evidence is archived.
+
 `spd-replay-episode` restores each recorded full-physics state and checks the
 same model hash, qpos/qvel tolerance, optional hand-object contact bit, and
 camera rendering. It never sends commands to a physical follower.

@@ -85,6 +85,10 @@ assets remain excluded from the public branch until their redistribution terms
 are confirmed. Additional CoACD trials, source hash, patch settings, and the
 exact quality-measurement definition are recorded in
 [`docs/spd_vr_collision_diagnostics.md`](docs/spd_vr_collision_diagnostics.md).
+The non-synthetic gates that require vendor terms, PICO hardware, a target
+CUDA host, formal data collection, or release review are collected in the
+[`docs/spd_vr_external_validation.md`](docs/spd_vr_external_validation.md)
+runbook; they are not waived by the local fake-source smoke tests.
 
 The public branch does not redistribute the vendor Tianji-Wuji2 URDF or STL
 bytes.  Place an authorized local bundle under `assets/tianji_wuji2/` and
@@ -252,6 +256,13 @@ uv run spd-policy-benchmark \
 
 Add `--enforce-deadline` only after reviewing the target-GPU run; a missing
 checkpoint or unavailable CUDA device returns a structured non-zero error.
+Formal deadline enforcement also requires the provenance JSON to bind the
+official model source, license/terms attestation and SHA-256 to the exact
+checkpoint file; provide it with
+`--checkpoint-provenance cache/dinov3-provenance.json`.
+For the required source/license/terms/hash record and the target-GPU,
+8-GPU-resume, hardware fault-matrix, and 75-hour collection gates, follow the
+external validation runbook linked above.
 
 Replay restores the recorded `mjSTATE_FULLPHYSICS` rows and checks qpos/qvel,
 state tolerance, optional hand-object contacts, and (with `--render`) camera

@@ -8,14 +8,20 @@ or treats a CPU result as a 30 Hz deployment qualification.
 from __future__ import annotations
 
 import argparse
+from datetime import date
 import hashlib
 import json
 from pathlib import Path
+import re
 import time
 from typing import Any, Sequence
 
 from .config import SPDModelConfig
 from .contracts import CAMERA_NAMES, HISTORY_STEPS, IMAGE_STRIDE, ROBOT_DOF
+
+
+EXPECTED_DINO_MODEL_ID = "facebook/dinov3-vitb16-pretrain-lvd1689m"
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
 def _sha256(path: Path) -> str:
@@ -26,6 +32,90 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def validate_checkpoint_provenance(
+    provenance_path: str | Path,
+    checkpoint: str | Path,
+) -> dict[str, Any]:
+    """Validate the human-supplied source/license record for one checkpoint.
+
+    The record is deliberately small and explicit.  It does not grant a
+    license; it makes the operator's source and terms review auditable and
+    binds the record to the exact checkpoint bytes used by the benchmark.
+    """
+    path = Path(provenance_path).expanduser().resolve()
+    checkpoint_path = Path(checkpoint).expanduser().resolve()
+    if not path.is_file():
+        raise FileNotFoundError(f"checkpoint provenance not found: {path}")
+    if not checkpoint_path.is_file():
+        raise FileNotFoundError(f"DINOv3 checkpoint not found: {checkpoint_path}")
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"invalid checkpoint provenance JSON: {path}") from exc
+    if not isinstance(document, dict):
+        raise ValueError("checkpoint provenance must be a JSON object")
+    required = {
+        "model_id",
+        "checkpoint_filename",
+        "source_url",
+        "license",
+        "license_url",
+        "terms_accepted",
+        "access_date",
+        "sha256",
+    }
+    missing = sorted(required.difference(document))
+    if missing:
+        raise ValueError(f"checkpoint provenance missing keys: {', '.join(missing)}")
+    if document["model_id"] != EXPECTED_DINO_MODEL_ID:
+        raise ValueError(
+            "checkpoint provenance model_id must be "
+            f"{EXPECTED_DINO_MODEL_ID!r}"
+        )
+    filename = document["checkpoint_filename"]
+    if not isinstance(filename, str) or not filename or Path(filename).name != filename:
+        raise ValueError("checkpoint_filename must be a non-empty basename")
+    if filename != checkpoint_path.name:
+        raise ValueError(
+            f"checkpoint_filename does not match checkpoint: {filename!r} != {checkpoint_path.name!r}"
+        )
+    for key in ("source_url", "license_url"):
+        value = document[key]
+        if not isinstance(value, str) or not value.startswith("https://"):
+            raise ValueError(f"{key} must be an https URL")
+    license_name = document["license"]
+    if not isinstance(license_name, str) or not license_name.strip():
+        raise ValueError("license must be a non-empty string")
+    if document["terms_accepted"] is not True:
+        raise ValueError("terms_accepted must be true before a formal benchmark")
+    access_date = document["access_date"]
+    if not isinstance(access_date, str):
+        raise ValueError("access_date must be an ISO date")
+    try:
+        date.fromisoformat(access_date)
+    except ValueError as exc:
+        raise ValueError("access_date must be an ISO date (YYYY-MM-DD)") from exc
+    expected_hash = document["sha256"]
+    if not isinstance(expected_hash, str) or not _SHA256_RE.fullmatch(expected_hash):
+        raise ValueError("sha256 must be 64 lowercase hexadecimal characters")
+    actual_hash = _sha256(checkpoint_path)
+    if expected_hash != actual_hash:
+        raise ValueError(
+            f"checkpoint provenance sha256 mismatch: expected {expected_hash}, got {actual_hash}"
+        )
+    return {
+        "path": str(path),
+        "model_id": document["model_id"],
+        "checkpoint_filename": filename,
+        "source_url": document["source_url"],
+        "license": license_name,
+        "license_url": document["license_url"],
+        "terms_accepted": True,
+        "access_date": access_date,
+        "sha256": actual_hash,
+    }
+
+
 def _synchronize(torch: Any, device: Any) -> None:
     if getattr(device, "type", None) == "cuda":
         torch.cuda.synchronize(device)
@@ -34,6 +124,7 @@ def _synchronize(torch: Any, device: Any) -> None:
 def benchmark_policy(
     dino_checkpoint: str | Path,
     *,
+    checkpoint_provenance: str | Path | None = None,
     device: str = "cuda",
     batch_size: int = 1,
     warmup_ticks: int = 2,
@@ -49,6 +140,9 @@ def benchmark_policy(
         raise FileNotFoundError(
             f"DINOv3 checkpoint not found: {checkpoint}; benchmark does not download weights"
         )
+    provenance = None
+    if checkpoint_provenance is not None:
+        provenance = validate_checkpoint_provenance(checkpoint_provenance, checkpoint)
     try:
         import torch
     except ImportError as exc:  # pragma: no cover - dependency setup
@@ -132,6 +226,7 @@ def benchmark_policy(
         "euler_steps": euler_steps,
         "dino_checkpoint": str(checkpoint),
         "dino_checkpoint_sha256": _sha256(checkpoint),
+        "dino_checkpoint_provenance": provenance,
         "dino_missing_keys": len(missing),
         "dino_unexpected_keys": len(unexpected),
         "parameters": parameter_report,
@@ -146,6 +241,12 @@ def benchmark_policy(
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dino-checkpoint", type=Path, required=True)
+    parser.add_argument(
+        "--checkpoint-provenance",
+        type=Path,
+        default=None,
+        help="JSON source/license/hash record; required with --enforce-deadline",
+    )
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--batch-size", type=int, default=1)
     parser.add_argument("--warmup-ticks", type=int, default=2)
@@ -154,9 +255,22 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--compile", action="store_true")
     parser.add_argument("--enforce-deadline", action="store_true")
     args = parser.parse_args(argv)
+    if args.enforce_deadline and args.checkpoint_provenance is None:
+        print(
+            json.dumps(
+                {
+                    "ok": False,
+                    "error": "--enforce-deadline requires --checkpoint-provenance",
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+            )
+        )
+        return 1
     try:
         report = benchmark_policy(
             args.dino_checkpoint,
+            checkpoint_provenance=args.checkpoint_provenance,
             device=args.device,
             batch_size=args.batch_size,
             warmup_ticks=args.warmup_ticks,
@@ -173,7 +287,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     return 0
 
 
-__all__ = ["benchmark_policy", "main"]
+__all__ = [
+    "EXPECTED_DINO_MODEL_ID",
+    "benchmark_policy",
+    "main",
+    "validate_checkpoint_provenance",
+]
 
 if __name__ == "__main__":
     raise SystemExit(main())
