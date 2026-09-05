@@ -43,8 +43,8 @@ class _FakeArmSolver:
         return np.asarray(previous_qpos, dtype=np.float64) + 0.2
 
 
-def test_dual_arm_controller_calibrates_and_holds_each_side_independently():
-    robot = RobotSpec.from_urdf(TeleopConfig().urdf_path)
+def test_dual_arm_controller_calibrates_and_holds_each_side_independently(vendor_urdf):
+    robot = RobotSpec.from_urdf(vendor_urdf)
     controller = DualArmIKController(
         robot,
         _FakeArmSolver(),
@@ -103,8 +103,8 @@ class _FakeHands:
         return np.full(20, 0.1 if side is Side.LEFT else -0.1)
 
 
-def test_viewer_fuses_arm_packet_and_hands_then_holds_on_stale_input():
-    robot = RobotSpec.from_urdf(TeleopConfig().urdf_path)
+def test_viewer_fuses_arm_packet_and_hands_then_holds_on_stale_input(vendor_urdf):
+    robot = RobotSpec.from_urdf(vendor_urdf)
     simulation = _Simulation()
     viewer = ViewerController(
         simulation,
@@ -133,7 +133,7 @@ def test_viewer_fuses_arm_packet_and_hands_then_holds_on_stale_input():
     assert simulation.steps == 2
 
 
-def test_viewer_arm_hold_uses_last_command_after_physics_moves():
+def test_viewer_arm_hold_uses_last_command_after_physics_moves(vendor_urdf):
     class MovingSimulation(_Simulation):
         def step(self):
             super().step()
@@ -142,7 +142,7 @@ def test_viewer_arm_hold_uses_last_command_after_physics_moves():
             self.addresses.value[0] += 0.25
             self.addresses.value[27] -= 0.25
 
-    robot = RobotSpec.from_urdf(TeleopConfig().urdf_path)
+    robot = RobotSpec.from_urdf(vendor_urdf)
     simulation = MovingSimulation()
     viewer = ViewerController(
         simulation,
@@ -168,8 +168,8 @@ def test_viewer_arm_hold_uses_last_command_after_physics_moves():
     np.testing.assert_allclose(simulation.targets[-1], command)
 
 
-def test_viewer_holds_future_timestamp_packets():
-    robot = RobotSpec.from_urdf(TeleopConfig().urdf_path)
+def test_viewer_holds_future_timestamp_packets(vendor_urdf):
+    robot = RobotSpec.from_urdf(vendor_urdf)
     simulation = _Simulation()
     viewer = ViewerController(simulation, robot, _FakeHands(), config=TeleopConfig(stale_after_ms=50))
     tracking = _tracking(1)
@@ -207,8 +207,8 @@ def test_side_alignment_stale_gate_holds_only_after_freshness_budget():
     assert alignment.stale(99).hold_reason == "stale"
 
 
-def test_invalid_tracking_bytes_are_dropped_without_resetting_safe_state():
-    robot = RobotSpec.from_urdf(TeleopConfig().urdf_path)
+def test_invalid_tracking_bytes_are_dropped_without_resetting_safe_state(vendor_urdf):
+    robot = RobotSpec.from_urdf(vendor_urdf)
     arm = DualArmIKController(robot, _FakeArmSolver())
     simulation = _Simulation()
     viewer = ViewerController(simulation, robot, _FakeHands())

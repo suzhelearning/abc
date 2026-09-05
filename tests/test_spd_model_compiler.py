@@ -1,11 +1,9 @@
 import os
-from pathlib import Path
 
 os.environ.setdefault("MUJOCO_GL", "egl")
 
 import numpy as np
 
-from spd_vr.config import TeleopConfig
 from spd_vr.data import EpisodeWriter, validate_episode
 from spd_vr.ik import MuJoCoArmIK
 from spd_vr.model_compiler.artifacts import (
@@ -22,8 +20,8 @@ from spd_vr.scenes.model_scene import write_scene_model
 from spd_vr.scenes.registry import get_task
 
 
-def test_raw_collision_smoke_build_has_54d_and_three_policy_cameras(tmp_path):
-    urdf = Path(TeleopConfig().urdf_path)
+def test_raw_collision_smoke_build_has_54d_and_three_policy_cameras(tmp_path, vendor_urdf):
+    urdf = vendor_urdf
     result = compile_models(
         urdf, tmp_path / "generated", tmp_path / "collision_cache", raw_collisions=True
     )

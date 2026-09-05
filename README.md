@@ -42,6 +42,12 @@ uv sync
 uv run pytest -q tests
 ```
 
+The public branch intentionally excludes the Tianji/Wuji2 URDF/STL bundle.
+Tests that need an authorized local URDF use `SPD_VR_TEST_URDF`; a clean
+checkout skips only those vendor-asset tests and still runs the rest of the
+suite.  With the local bundle installed, the full asset-dependent regression
+also runs.
+
 ## SPD-VR branch: PICO to a 54-DoF digital twin
 
 The `spd-vr` branch adds a simulation-only adaptation of *Pre-training Visual

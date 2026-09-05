@@ -46,9 +46,9 @@ def _frame(sequence, valid=(True, True), epoch=1):
     )
 
 
-def test_calibration_then_per_side_hold_preserves_last_safe_target():
+def test_calibration_then_per_side_hold_preserves_last_safe_target(vendor_urdf):
     config = TeleopConfig(alignment_frames=2)
-    robot = RobotSpec.from_urdf(config.urdf_path)
+    robot = RobotSpec.from_urdf(vendor_urdf)
     mapper = TeleopMapper(robot, FakeArmIK(), FakeHands(), config)
 
     first, status = mapper.update(_frame(1))
@@ -66,10 +66,10 @@ def test_calibration_then_per_side_hold_preserves_last_safe_target():
     assert not np.array_equal(third.qpos[27:], second.qpos[27:])
 
 
-def test_epoch_change_forces_recalibration():
+def test_epoch_change_forces_recalibration(vendor_urdf):
     config = TeleopConfig(alignment_frames=2)
     mapper = TeleopMapper(
-        RobotSpec.from_urdf(config.urdf_path), FakeArmIK(), FakeHands(), config
+        RobotSpec.from_urdf(vendor_urdf), FakeArmIK(), FakeHands(), config
     )
     mapper.update(_frame(1))
     mapper.update(_frame(2))

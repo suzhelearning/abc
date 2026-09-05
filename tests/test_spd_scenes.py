@@ -1,6 +1,5 @@
 import numpy as np
 import json
-from pathlib import Path
 import pytest
 
 from spd_vr.augment import SymmetrySpec, augment_trajectory
@@ -107,14 +106,13 @@ def test_segmentation_randomization_changes_instances_not_background():
     assert not np.array_equal(result[0, 0], rgb[0, 0])
 
 
-def test_scene_model_writer_does_not_consume_generated_worldbody(tmp_path):
+def test_scene_model_writer_does_not_consume_generated_worldbody(tmp_path, vendor_urdf):
     # A generated result is deliberately reusable: writing a second model
     # must not mutate the first result's XML children.
-    root = Path(__file__).resolve().parents[1]
     from spd_vr.model_compiler.artifacts import compile_models
 
     compiled = compile_models(
-        root / "assets/tianji_wuji2/tianji_wuji2.urdf",
+        vendor_urdf,
         tmp_path / "generated",
         tmp_path / "collision_cache",
         raw_collisions=True,

@@ -1,9 +1,6 @@
-from pathlib import Path
-
 import numpy as np
 import pytest
 
-from spd_vr.config import TeleopConfig
 from spd_vr.config import SPDModelConfig, validate_spd_model_config
 from spd_vr.contracts import ROBOT_DOF
 from spd_vr.robot import (
@@ -16,8 +13,8 @@ from spd_vr.robot import (
 )
 
 
-def test_authoritative_urdf_has_exact_canonical_contract():
-    path = Path(TeleopConfig().urdf_path)
+def test_authoritative_urdf_has_exact_canonical_contract(vendor_urdf):
+    path = vendor_urdf
     robot = RobotSpec.from_urdf(path)
     assert path.is_file()
     assert len(robot.joint_names) == ROBOT_DOF
@@ -28,8 +25,8 @@ def test_authoritative_urdf_has_exact_canonical_contract():
     assert np.all(robot.lower < robot.upper)
 
 
-def test_robot_clip_rejects_bad_shape_and_clips_limits():
-    robot = RobotSpec.from_urdf(TeleopConfig().urdf_path)
+def test_robot_clip_rejects_bad_shape_and_clips_limits(vendor_urdf):
+    robot = RobotSpec.from_urdf(vendor_urdf)
     clipped = robot.clip(np.full(ROBOT_DOF, 100.0))
     np.testing.assert_allclose(clipped, robot.upper)
     try:
