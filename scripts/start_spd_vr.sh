@@ -17,6 +17,7 @@ fake_source=""
 wait_for_shutdown=0
 record_to=""
 scene_manifest=""
+router_timeout=300
 mode="detach"
 action="start"
 dry_run=0
@@ -43,6 +44,7 @@ Start options:
   --wait-for-shutdown       keep a fake source alive until spd-control shutdown
   --scene-manifest PATH    deterministic SPD scene JSON
   --record-to PATH         atomic HDF5 episode output
+  --router-timeout SEC     wait for the viewer Zenoh router before clients (default 300)
   --preflight              run read-only PICO, dependency, artifact, and port checks before tmux
 EOF
 }
@@ -71,11 +73,17 @@ while (($#)); do
     --wait-for-shutdown) wait_for_shutdown=1; shift ;;
     --scene-manifest) need_value "$@"; scene_manifest="$2"; shift 2 ;;
     --record-to) need_value "$@"; record_to="$2"; shift 2 ;;
+    --router-timeout) need_value "$@"; router_timeout="$2"; shift 2 ;;
     --preflight) run_preflight=1; shift ;;
     --help|-h) usage; exit 0 ;;
     *) echo "unknown option: $1" >&2; usage >&2; exit 2 ;;
   esac
 done
+
+if ! [[ "$router_timeout" =~ ^[0-9]+$ ]] || ((router_timeout <= 0)); then
+  echo "--router-timeout must be a positive integer" >&2
+  exit 2
+fi
 
 if [[ "$action" == "status" ]]; then
   command -v tmux >/dev/null || { echo "tmux is required" >&2; exit 1; }
@@ -181,6 +189,49 @@ tmux new-session -d -s "$session_name" -n viewer
 tmux set-option -t "$session_name" remain-on-exit on >/dev/null
 tmux send-keys -t "$session_name:viewer" \
   "cd $(q "$repo_root") && exec $viewer_line" C-m
+
+wait_for_router() {
+  local address host port deadline pane_dead
+  case "$endpoint" in
+    tcp/\[*\]:*)
+      address="${endpoint#tcp/}"
+      host="${address%%]:*}]"
+      host="${host#[}"
+      port="${address##*:}"
+      ;;
+    tcp/*:*)
+      address="${endpoint#tcp/}"
+      host="${address%:*}"
+      port="${address##*:}"
+      ;;
+    *)
+      echo "cannot wait for unsupported Zenoh endpoint: $endpoint" >&2
+      return 2
+      ;;
+  esac
+  deadline=$((SECONDS + router_timeout))
+  while ((SECONDS < deadline)); do
+    pane_dead="$(tmux display-message -p -t "$session_name:viewer" '#{pane_dead}' 2>/dev/null || printf '1')"
+    if [[ "$pane_dead" == "1" ]]; then
+      echo "viewer exited before Zenoh router became ready" >&2
+      tmux capture-pane -t "$session_name:viewer" -p -S -80 >&2 || true
+      return 1
+    fi
+    if (exec 3<>"/dev/tcp/$host/$port") 2>/dev/null; then
+      exec 3>&-
+      return 0
+    fi
+    sleep 1
+  done
+  echo "timed out after ${router_timeout}s waiting for Zenoh router at $endpoint" >&2
+  tmux capture-pane -t "$session_name:viewer" -p -S -80 >&2 || true
+  return 1
+}
+
+if ! wait_for_router; then
+  tmux kill-session -t "$session_name" 2>/dev/null || true
+  exit 1
+fi
 tmux new-window -t "$session_name" -n arm_ik
 tmux send-keys -t "$session_name:arm_ik" \
   "cd $(q "$repo_root") && sleep 1 && exec $arm_line" C-m

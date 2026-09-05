@@ -320,3 +320,12 @@ def test_three_window_launcher_fake_source_shutdown_option_is_wired():
     )
     assert rejected.returncode == 2
     assert "only valid with --fake-source-jsonl" in rejected.stderr
+
+    invalid_timeout = subprocess.run(
+        [str(script), "--dry-run", "--router-timeout", "0"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert invalid_timeout.returncode == 2
+    assert "--router-timeout must be a positive integer" in invalid_timeout.stderr
