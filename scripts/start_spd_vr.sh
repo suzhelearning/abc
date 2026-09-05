@@ -45,7 +45,7 @@ Start options:
   --wait-for-shutdown       keep a fake source alive until spd-control shutdown
   --scene-manifest PATH    deterministic SPD scene JSON
   --record-to PATH         atomic HDF5 episode output
-  --require-usable-training fail closed if the episode has no contact-eligible segment
+  --require-usable-training fail closed if the episode has no complete SPD training window
   --router-timeout SEC     wait for the viewer Zenoh router before clients (default 300)
   --preflight              run read-only PICO, dependency, artifact, and port checks before tmux
 EOF

@@ -156,7 +156,32 @@ def test_episode_writer_can_require_usable_training_before_publish(tmp_path, mon
         return np.zeros(len(timestamps), dtype=np.bool_), []
 
     monkeypatch.setattr(data_module, "filter_contact_mask", no_eligible_rows)
-    with pytest.raises(ValueError, match="usable contact-eligible training segment"):
+    with pytest.raises(ValueError, match="usable contact-eligible training window"):
+        writer.finish()
+    assert not output.exists()
+    assert not list(tmp_path.glob("*.staging"))
+
+
+def test_episode_writer_rejects_a_segment_shorter_than_one_spd_window(tmp_path, monkeypatch):
+    output = tmp_path / "short.hdf5"
+    writer = EpisodeWriter(output, {}, require_usable_training=True)
+    for index in range(3):
+        writer.append(_frame(index))
+
+    monkeypatch.setattr(
+        data_module,
+        "filter_contact_mask",
+        lambda timestamps, contacts, *, threshold_ns=0: (
+            np.ones(len(timestamps), dtype=np.bool_),
+            [],
+        ),
+    )
+    monkeypatch.setattr(
+        data_module,
+        "build_contact_segments",
+        lambda grid_step, eligible: np.asarray([[0, 1]], dtype=np.int64),
+    )
+    with pytest.raises(ValueError, match="usable contact-eligible training window"):
         writer.finish()
     assert not output.exists()
     assert not list(tmp_path.glob("*.staging"))

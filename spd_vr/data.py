@@ -425,6 +425,33 @@ def build_contact_segments(
     return np.asarray(segments, dtype=np.int64).reshape(-1, 2)
 
 
+def count_training_windows(
+    segments: Sequence[Sequence[int]] | np.ndarray,
+    *,
+    window_span: int = WINDOW_SPAN,
+) -> int:
+    """Count complete SPD samples available inside contiguous index segments."""
+    raw = np.asarray(segments)
+    if raw.ndim != 2 or raw.shape[1:] != (2,) or raw.dtype.kind not in {"i", "u"}:
+        raise ValueError("segments must be an integer [S,2] array")
+    if raw.dtype.kind == "u" and raw.size and np.any(raw > np.iinfo(np.int64).max):
+        raise ValueError("segments exceed signed 64-bit bounds")
+    value = raw.astype(np.int64, copy=False)
+    if value.size and (
+        np.any(value[:, 0] < 0)
+        or np.any(value[:, 1] < value[:, 0])
+    ):
+        raise ValueError("segments must contain non-negative [start,end] intervals")
+    if (
+        isinstance(window_span, bool)
+        or not isinstance(window_span, Integral)
+        or int(window_span) <= 0
+    ):
+        raise ValueError("window_span must be a positive integer")
+    lengths = value[:, 1] - value[:, 0]
+    return int(np.maximum(lengths - int(window_span) + 1, 0).sum())
+
+
 class EpisodeWriter:
     """Stream one episode to a staging file, validate it, then publish atomically."""
 
@@ -555,10 +582,9 @@ class EpisodeWriter:
             grid_step = _training_grid_steps(timestamps, train_index)
             contact_eligible = contact_keep[train_index]
             segments = build_contact_segments(grid_step, contact_eligible)
-            if self.require_usable_training and (
-                not np.any(contact_eligible) or segments.shape[0] == 0
-            ):
-                raise ValueError("no usable contact-eligible training segment")
+            usable_windows = count_training_windows(segments)
+            if self.require_usable_training and usable_windows == 0:
+                raise ValueError("no usable contact-eligible training window")
             self._handle.create_dataset(
                 "training/index_30hz", data=train_index, dtype=np.int64
             )
@@ -1075,6 +1101,7 @@ __all__ = [
     "SPDSequenceDataset",
     "build_training_index",
     "build_contact_segments",
+    "count_training_windows",
     "filter_contact_mask",
     "scan_episodes",
     "sequence_indices",

@@ -16,7 +16,7 @@ import json
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-from .data import scan_episodes, validate_episode
+from .data import count_training_windows, scan_episodes, validate_episode
 from .model_compiler.artifacts import verify_artifacts, verify_contact_qualified
 from .replay import replay_episode
 from .robot import RobotSpec
@@ -170,6 +170,14 @@ def _check_artifacts(
     return artifact, AcceptanceResult("contact_gate", True, "all collision records pass surface gate", report)
 
 
+def _episode_training_windows(path: Path) -> int:
+    """Count complete 258-row samples from a validated episode's segments."""
+    import h5py
+
+    with h5py.File(path, "r") as handle:
+        return count_training_windows(handle["training/segments_30hz"][:])
+
+
 def _check_episode(
     path: Path,
     *,
@@ -180,6 +188,10 @@ def _check_episode(
         manifest = validate_episode(path, verify_checksums=verify_checksums)
     except Exception as exc:
         return AcceptanceResult("episode", False, f"{path}: {exc}")
+    try:
+        usable_training_windows = _episode_training_windows(path)
+    except Exception as exc:
+        return AcceptanceResult("episode", False, f"{path}: cannot inspect training windows: {exc}")
     contact_filter = manifest.get("contact_filter")
     if not isinstance(contact_filter, Mapping):
         return AcceptanceResult("episode", False, f"{path}: contact_filter is missing")
@@ -200,13 +212,14 @@ def _check_episode(
         "training_frames": int(manifest.get("training_frames", 0)),
         "contact_eligible_frames": int(contact_eligible_frames),
         "training_segments": int(training_segments),
+        "usable_training_windows": int(usable_training_windows),
         "checksum_verified": bool(verify_checksums),
     }
-    if require_usable_training and (contact_eligible_frames <= 0 or training_segments <= 0):
+    if require_usable_training and usable_training_windows <= 0:
         return AcceptanceResult(
             "episode",
             False,
-            f"{path}: no usable contact-eligible training segment",
+            f"{path}: no usable contact-eligible training window",
             metrics,
         )
     return AcceptanceResult(
@@ -347,7 +360,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--require-usable-training",
         action="store_true",
-        help="fail episode acceptance when no contact-eligible 30 Hz training segment exists",
+        help="fail episode acceptance when no complete contact-eligible SPD training window exists",
     )
     parser.add_argument("--no-checksums", action="store_true")
     parser.add_argument("--replay", action="store_true")

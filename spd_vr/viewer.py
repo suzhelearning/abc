@@ -529,7 +529,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--require-usable-training",
         action="store_true",
-        help="fail closed before publishing when no contact-eligible training segment exists",
+        help="fail closed before publishing when no complete contact-eligible SPD training window exists",
     )
     parser.add_argument("--viewer", action="store_true")
     return run(parser.parse_args(argv))

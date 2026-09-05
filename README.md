@@ -197,7 +197,7 @@ also enforce the contact surface-quality gate:
 uv run spd-vr-preflight --manifest generated/spd_vr/model_manifest.yaml \
   --urdf assets/tianji_wuji2/tianji_wuji2.urdf --require-contact
 scripts/start_spd_vr.sh --preflight --record-to cache/spd/train/episode.hdf5
-# For a formal episode, fail before atomic publication if no usable segment exists:
+# For a formal episode, fail before atomic publication if no complete SPD window exists:
 scripts/start_spd_vr.sh --preflight --record-to cache/spd/train/episode.hdf5 \
   --require-usable-training
 ```
@@ -219,8 +219,8 @@ uv run spd-vr-acceptance --seed-count 3 --episodes cache/spd/train \
 
 No `--episodes` means the data portion is reported as not requested.  Passing
 an empty episode directory, a malformed episode, an unqualified collision
-manifest, a replay/model hash mismatch, or (when requested) an episode with no
-contact-eligible 30 Hz training segment returns non-zero.  Synthetic idle
+manifest, a replay/model hash mismatch, or (when requested) an episode with no complete
+contact-eligible 258-row SPD training window returns non-zero.  Synthetic idle
 smoke can omit `--require-usable-training`; it must not be reported as formal
 demonstration data.
 

@@ -80,8 +80,8 @@ Accepted targets are also rate-limited from URDF joint velocity limits at the
   are dropped rather than clamped into a fresh-looking sample.
 - Publication is staging-file → structural validation → atomic rename.
 - `EpisodeWriter(require_usable_training=True)` adds a formal-data gate before
-  the atomic rename; it rejects a recording with no contact-eligible training
-  segment. The live viewer, combined smoke entry, lifecycle recorder, and
+  the atomic rename; it rejects a recording with no complete contact-eligible
+  258-row SPD window. The live viewer, combined smoke entry, lifecycle recorder, and
   three-window launcher expose this as `--require-usable-training`.
 
 Zenoh process keys have fixed payload sizes: `spd/vr/v1/tracking` is 1,540
@@ -146,7 +146,7 @@ an explicitly supplied HDF5 file/directory (including checksums).  With
 without `--episodes` it reports data acceptance as not requested rather than
 inventing a pass.  Formal data acceptance should add
 `--require-usable-training`, which rejects a structurally valid but entirely
-idle episode with no contact-eligible 30 Hz segment; synthetic idle smoke may
+idle episode with no complete contact-eligible 258-row SPD window; synthetic idle smoke may
 omit that opt-in gate but is never equivalent to a demonstration dataset.
 
 `spd-sim-benchmark` measures the MuJoCo/MJWarp control tick (480 Hz physics,

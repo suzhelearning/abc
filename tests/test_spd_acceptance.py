@@ -70,6 +70,7 @@ def test_acceptance_can_require_a_contact_eligible_training_segment(tmp_path, mo
         },
     }
     monkeypatch.setattr(acceptance, "validate_episode", lambda path, verify_checksums: manifest)
+    monkeypatch.setattr(acceptance, "_episode_training_windows", lambda path: 0)
 
     rejected = acceptance._check_episode(
         episode,
@@ -77,9 +78,10 @@ def test_acceptance_can_require_a_contact_eligible_training_segment(tmp_path, mo
         require_usable_training=True,
     )
     assert rejected.ok is False
-    assert "usable contact-eligible training segment" in rejected.detail
+    assert "usable contact-eligible training window" in rejected.detail
     assert rejected.metrics["training_segments"] == 0
 
+    monkeypatch.setattr(acceptance, "_episode_training_windows", lambda path: 1)
     manifest["contact_filter"] = {
         "training_eligible_frames": 12,
         "training_segments": 1,
@@ -91,6 +93,7 @@ def test_acceptance_can_require_a_contact_eligible_training_segment(tmp_path, mo
     )
     assert accepted.ok is True
     assert accepted.metrics["contact_eligible_frames"] == 12
+    assert accepted.metrics["usable_training_windows"] == 1
 
 
 def test_model_builder_uses_repository_root_and_single_compiler(monkeypatch, tmp_path):
