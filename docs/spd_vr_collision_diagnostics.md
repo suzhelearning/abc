@@ -1,8 +1,11 @@
 # SPD-VR collision-quality diagnostics
 
-This note records bounded CoACD experiments for the locally authorized
-`Link_Base.STL`.  It is diagnostic evidence only: no result below is a
-published collision artifact, and the 3 mm contact gate remains fail-closed.
+This note records bounded CoACD experiments and the contact-qualified adaptive
+surface-patch build for the locally authorized `Link_Base.STL`. CoACD remains
+diagnostic evidence when its approximation misses the gate; the compiler now
+has a separate deterministic convex-patch backend that publishes only after
+the same measured surface gate passes. Vendor bytes and generated artifacts
+are still local until redistribution terms are confirmed.
 
 ## Source and metric
 
@@ -13,6 +16,34 @@ published collision artifact, and the 3 mm contact gate remains fail-closed.
   deterministic NumPy RNG seed `0`; the reported value is the larger of
   source→proxy and proxy→source p95 distances.
 - gate: `0.003 m` (`3 mm`)
+
+## Contact-qualified surface-patch build
+
+The default compiler backend welds exact duplicate vertices, splits connected
+components, bins triangle centroids into deterministic cells, and recursively
+bisects any bin whose convex hull would exceed 64 vertices. Planar bins are
+extruded by `0.15 mm` to produce positive-volume MuJoCo meshes. Arm links start
+at a `16 mm` cell and hand links at `4.5 mm`; the backend halves the cell on a
+quality miss, up to the recorded refinement limit. `rtree` supplies the
+spatial index used by the surface-distance measurement.
+
+The local authorized bundle produced the following artifact (`spd-model`
+compile followed by `spd-model --verify --verify-contact`):
+
+| quantity | result |
+| --- | ---: |
+| collision identities | 62 |
+| total convex pieces | 23,099 |
+| maximum record p95 | 2.5855 mm |
+| `Link_Base.STL` pieces / p95 | 4,617 / 2.1596 mm |
+| maximum piece vertices | 64 |
+| generated directory size | about 95.7 MB |
+
+The generated full plant and arm model both retained the 54/14 joint
+contracts. A `0.125 s` MuJoCo benchmark on this CPU completed 64 physics steps
+and 8 control ticks with step p95 about `9.10 ms`, below the `16.67 ms` control
+budget. This is a local simulation diagnostic, not a hardware or physical
+contact validation.
 
 ## Bounded trials
 
@@ -31,9 +62,9 @@ positive-volume checks used by the diagnostic, but the quality gate did not.
 The result is not monotonic in the requested hull budget because the source
 contains many disconnected/non-manifold regions and CoACD preprocessing is
 itself a lossy voxelization.  Raising the budget or lowering the threshold
-alone is therefore not evidence that a 3 mm proxy exists.  The default
-compiler still uses its fixed reproducible settings and rejects any artifact
-whose measured p95 exceeds the manifest gate.
+alone is therefore not evidence that a 3 mm proxy exists.  The adaptive patch
+backend is a separate explicit path; it records its settings and rejects any
+artifact whose measured p95 exceeds the manifest gate.
 
 ## Topology-repair trial
 
@@ -48,9 +79,10 @@ solve the approximation error:
 - some thin components returned zero-volume hulls, which are rejected by the
   production artifact validator.
 
-The repair is useful for diagnosing the vendor STL but is not applied silently
-by the compiler: changing the source topology would change the source hash and
-must be accompanied by a vendor-approved collision asset and a new manifest.
+The repair is now an explicit, hashed compiler transformation used only to
+construct convex surface patches; it never replaces the authoritative source
+mesh in the visual model or source manifest. Any vendor-approved collision
+asset can still supersede it, but must carry its own source hash and manifest.
 
 ## Reproducibility
 
@@ -64,6 +96,7 @@ sha256sum assets/tianji_wuji2/meshes/Link_Base.STL
 
 The full CoACD stdout and temporary piece arrays used for this note were kept
 outside the repository under `/tmp/spd_coacd*`; they are intentionally not
-treated as release artifacts.  A future contact-qualified build must provide
-a fresh manifest that lists the source hash, exact CoACD settings, all pieces,
-and a measured p95 at or below 3 mm before recording contact data.
+treated as release artifacts. A future published contact build must provide a
+fresh manifest that lists the source hash, exact patch/CoACD settings, all
+pieces, and a measured p95 at or below the per-link gate before recording
+contact data.

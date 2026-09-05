@@ -60,18 +60,24 @@ is fixed and independent of URDF/MJCF storage order:
 left arm 7 + left hand 20 + right arm 7 + right hand 20 = 54 DoF
 ```
 
-Build the MuJoCo plant from the authoritative URDF. The normal command uses
-CoACD collision proxies and fails closed if a proxy misses its surface gate.
-At present the vendor `Link_Base.STL` proxy is about 36.8 mm at p95 versus the
-3 mm gate, so a contact-qualified build is still blocked. After safe mesh
-processing the file still has about 79,405 vertices across 46 disconnected
-components; bounded CoACD trials at 128 and 256 pieces remain about 12.3 mm and
-8.9 mm p95 (merge disabled: about 2,610 pieces and 8.0 mm). `--raw-collisions`
-is only a display/control smoke mode because MuJoCo treats each raw mesh as a
-convex hull.
+Build the MuJoCo plant from the authoritative URDF. The normal command uses a
+deterministic, adaptive convex-surface-patch backend and fails closed if any
+proxy misses its surface gate. It welds each connected source component,
+partitions it spatially, recursively bounds every convex piece to 64 vertices,
+and measures the bidirectional surface p95 before publishing. The locally
+authorized vendor bundle now compiles to 62 contact records / 23,099 pieces;
+the worst record is about 2.59 mm p95 (below the 3 mm arm gate), and
+`Link_Base.STL` is about 2.16 mm with 4,617 pieces. `rtree` is a declared
+dependency so large-mesh quality checks use a bounded spatial index. CoACD
+remains available through the collision API and its bounded trials are kept as
+diagnostic evidence, but they do not silently become a contact proxy when they
+miss the gate. `--raw-collisions` is only a display/control smoke mode because
+MuJoCo treats each raw mesh as a convex hull.
 
-Additional bounded high-budget results, source hash, and the exact quality
-measurement definition are recorded in
+The generated contact artifact is still a local validation result; vendor
+assets remain excluded from the public branch until their redistribution terms
+are confirmed. Additional CoACD trials, source hash, patch settings, and the
+exact quality-measurement definition are recorded in
 [`docs/spd_vr_collision_diagnostics.md`](docs/spd_vr_collision_diagnostics.md).
 
 The public branch does not redistribute the vendor Tianji-Wuji2 URDF or STL

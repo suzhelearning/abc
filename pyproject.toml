@@ -14,6 +14,8 @@ dependencies = [
     "pin",
     "coacd",
     "trimesh",
+    # trimesh uses the spatial index for bounded collision-quality distance checks.
+    "rtree",
     "eclipse-zenoh==1.10.0",
     "torch==2.11.0+cu128",
     "torchcodec==0.11.0+cpu",

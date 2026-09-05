@@ -19,6 +19,7 @@ import coacd
 import fcntl
 import numpy as np
 import trimesh
+from scipy.spatial import ConvexHull, QhullError
 
 from .urdf_model import MeshGeometry
 
@@ -33,6 +34,7 @@ class CollisionError(RuntimeError):
 class CollisionSettings:
     """The complete, reproducible CoACD invocation and quality policy."""
 
+    method: str = "coacd"
     seed: int = 0
     max_pieces: int = 16
     max_vertices: int = 64
@@ -52,11 +54,17 @@ class CollisionSettings:
     real_metric: bool = False
     surface_samples: int = 2048
     surface_p95_threshold_m: float = 0.0015
+    surface_patch_cell_size_m: float | None = None
+    surface_patch_extrusion_m: float = 0.00015
+    surface_patch_max_pieces: int = 20_000
+    surface_patch_refinements: int = 3
     _extra_coacd_params: tuple[tuple[str, Any], ...] = field(default_factory=tuple, repr=False)
 
     def __post_init__(self) -> None:
+        if self.method not in {"coacd", "surface_patch"}:
+            raise ValueError("collision method must be 'coacd' or 'surface_patch'")
         if self.seed != 0 or self.max_pieces != 16 or self.max_vertices != 64:
-            raise ValueError("collision builds require seed=0, 16 pieces, and 64 vertices")
+            raise ValueError("CoACD builds require seed=0, 16 pieces, and 64 vertices")
         overridden = {"seed", "max_convex_hull", "max_ch_vertex"} & dict(self._extra_coacd_params).keys()
         if overridden:
             raise ValueError(f"cannot override fixed CoACD parameters: {sorted(overridden)}")
@@ -64,6 +72,14 @@ class CollisionSettings:
             raise ValueError("surface quality settings must be finite and positive")
         if self.surface_p95_threshold_m <= 0:
             raise ValueError("surface_p95_threshold_m must be positive")
+        if self.surface_patch_cell_size_m is not None and (
+            not np.isfinite(self.surface_patch_cell_size_m) or self.surface_patch_cell_size_m <= 0
+        ):
+            raise ValueError("surface_patch_cell_size_m must be positive and finite")
+        if not np.isfinite(self.surface_patch_extrusion_m) or self.surface_patch_extrusion_m <= 0:
+            raise ValueError("surface_patch_extrusion_m must be positive and finite")
+        if self.surface_patch_max_pieces <= 0 or self.surface_patch_refinements < 0:
+            raise ValueError("surface patch limits must be positive")
 
     def coacd_kwargs(self) -> dict[str, Any]:
         """Return exactly the keyword arguments accepted by CoACD 1.0.14."""
@@ -88,6 +104,23 @@ class CollisionSettings:
         }
         params.update(dict(self._extra_coacd_params))
         return params
+
+    def manifest_settings(self) -> dict[str, Any]:
+        """Return the full deterministic backend policy stored in manifests."""
+        return {
+            "method": self.method,
+            "coacd": self.coacd_kwargs(),
+            "surface_patch": {
+                "cell_size_m": self.surface_patch_cell_size_m,
+                "extrusion_m": self.surface_patch_extrusion_m,
+                "max_pieces": self.surface_patch_max_pieces,
+                "refinements": self.surface_patch_refinements,
+            },
+        }
+
+    @property
+    def published_max_pieces(self) -> int:
+        return self.surface_patch_max_pieces if self.method == "surface_patch" else self.max_pieces
 
 
 @dataclass(frozen=True, slots=True)
@@ -331,6 +364,188 @@ def bidirectional_surface_p95(
     return float(max(source_to_proxy, proxy_to_source))
 
 
+def _convex_hull_piece(points: np.ndarray, max_vertices: int) -> trimesh.Trimesh | None:
+    """Build an oriented convex piece, or return ``None`` for a degenerate hull."""
+    try:
+        hull = ConvexHull(points, qhull_options="Qc Qx Q12")
+    except QhullError:
+        return None
+    if len(hull.vertices) > max_vertices:
+        return None
+    remap = np.full(len(points), -1, dtype=np.int64)
+    remap[hull.vertices] = np.arange(len(hull.vertices), dtype=np.int64)
+    faces = remap[np.asarray(hull.simplices, dtype=np.int64)]
+    if (faces < 0).any():
+        return None
+    piece = trimesh.Trimesh(
+        vertices=np.asarray(points[hull.vertices], dtype=np.float64),
+        faces=np.asarray(faces, dtype=np.int64),
+        process=False,
+    )
+    # scipy does not promise a consistent winding for the simplex facets;
+    # MuJoCo and the manifest validator both require a real positive-volume
+    # mesh, so orient the closed hull before measuring it.
+    piece.fix_normals()
+    try:
+        volume = abs(float(piece.volume))
+    except Exception:
+        return None
+    if not np.isfinite(volume) or volume <= 1e-15:
+        return None
+    return piece
+
+
+def _patch_normal(triangles: np.ndarray, indices: np.ndarray, points: np.ndarray) -> np.ndarray | None:
+    """Return a deterministic normal for a planar/near-planar triangle patch."""
+    normals = np.cross(
+        triangles[indices, 1] - triangles[indices, 0],
+        triangles[indices, 2] - triangles[indices, 0],
+    )
+    lengths = np.linalg.norm(normals, axis=1)
+    valid = lengths > 1e-15
+    if valid.any():
+        normal = normals[valid].sum(axis=0)
+        length = float(np.linalg.norm(normal))
+        if length > 1e-12:
+            return normal / length
+    try:
+        _, singular_values, vectors = np.linalg.svd(
+            points - points.mean(axis=0), full_matrices=False
+        )
+    except np.linalg.LinAlgError:
+        return None
+    if len(singular_values) < 2 or float(singular_values[0]) <= 1e-15:
+        return None
+    normal = np.asarray(vectors[-1], dtype=np.float64)
+    length = float(np.linalg.norm(normal))
+    return normal / length if length > 1e-12 else None
+
+
+def _surface_patch_candidate(
+    triangles: np.ndarray,
+    indices: np.ndarray,
+    settings: CollisionSettings,
+) -> tuple[trimesh.Trimesh, bool] | None:
+    """Make one convex patch, extruding planar patches by a small fixed margin."""
+    points = np.unique(np.asarray(triangles[indices], dtype=np.float64).reshape(-1, 3), axis=0)
+    if len(points) < 4:
+        # A single triangle is still a valid surface patch; the extrusion path
+        # below turns it into a thin positive-volume convex prism.
+        if len(points) < 3:
+            return None
+    direct = _convex_hull_piece(points, settings.max_vertices)
+    if direct is not None:
+        return direct, False
+    normal = _patch_normal(triangles, indices, points)
+    if normal is None:
+        return None
+    extruded = np.vstack(
+        (
+            points + normal[None, :] * settings.surface_patch_extrusion_m,
+            points - normal[None, :] * settings.surface_patch_extrusion_m,
+        )
+    )
+    piece = _convex_hull_piece(extruded, settings.max_vertices)
+    return (piece, True) if piece is not None else None
+
+
+def _surface_patch_pieces(
+    source: trimesh.Trimesh,
+    settings: CollisionSettings,
+    cell_size_m: float,
+) -> tuple[list[trimesh.Trimesh], dict[str, Any]]:
+    """Partition welded connected surfaces into bounded convex patches."""
+    clean = source.copy()
+    clean.merge_vertices(digits_vertex=8)
+    clean.update_faces(clean.unique_faces())
+    clean.update_faces(clean.nondegenerate_faces())
+    clean.remove_unreferenced_vertices()
+    if len(clean.faces) == 0:
+        raise CollisionError("surface patch source has no non-degenerate faces")
+
+    pieces: list[trimesh.Trimesh] = []
+    component_count = 0
+    split_count = 0
+    extruded_count = 0
+    for component in clean.split(only_watertight=False):
+        component_count += 1
+        triangles = np.asarray(component.triangles, dtype=np.float64)
+        if len(triangles) == 0 or not np.isfinite(triangles).all():
+            raise CollisionError("surface patch component is empty or non-finite")
+        centroids = triangles.mean(axis=1)
+        cell_index = np.floor(centroids / cell_size_m).astype(np.int64)
+        grouped: dict[tuple[int, int, int], list[int]] = {}
+        for index, key in enumerate(map(tuple, cell_index)):
+            grouped.setdefault(key, []).append(index)
+        # Sorted keys make the recursive partition independent of hash order.
+        stack = [np.asarray(grouped[key], dtype=np.int64) for key in sorted(grouped)]
+        while stack:
+            indices = stack.pop()
+            candidate = _surface_patch_candidate(triangles, indices, settings)
+            if candidate is not None:
+                piece, was_extruded = candidate
+                pieces.append(piece)
+                extruded_count += int(was_extruded)
+                if len(pieces) > settings.surface_patch_max_pieces:
+                    raise CollisionError(
+                        "surface patch decomposition exceeds "
+                        f"{settings.surface_patch_max_pieces} pieces"
+                    )
+                continue
+            if len(indices) <= 1:
+                raise CollisionError("surface patch contains an irreducibly degenerate triangle")
+            axis = int(np.argmax(np.ptp(centroids[indices], axis=0)))
+            ordered = indices[np.argsort(centroids[indices, axis], kind="mergesort")]
+            middle = len(ordered) // 2
+            if middle <= 0 or middle >= len(ordered):
+                raise CollisionError("surface patch cannot be split deterministically")
+            stack.append(ordered[:middle])
+            stack.append(ordered[middle:])
+            split_count += 1
+    if not pieces:
+        raise CollisionError("surface patch decomposition returned no pieces")
+    return pieces, {
+        "method": "surface_patch",
+        "cell_size_m": float(cell_size_m),
+        "component_count": component_count,
+        "split_count": split_count,
+        "extruded_piece_count": extruded_count,
+        "piece_count": len(pieces),
+        "max_piece_vertices": max(len(piece.vertices) for piece in pieces),
+    }
+
+
+def _decompose_surface_patches(
+    source: trimesh.Trimesh,
+    settings: CollisionSettings,
+) -> tuple[list[trimesh.Trimesh], float, dict[str, Any]]:
+    """Find a deterministic patch resolution that passes the surface gate."""
+    cell_size = settings.surface_patch_cell_size_m
+    if cell_size is None:
+        cell_size = settings.surface_p95_threshold_m * 3.0
+    last_p95 = float("inf")
+    last_metrics: dict[str, Any] = {}
+    for refinement in range(settings.surface_patch_refinements + 1):
+        pieces, metrics = _surface_patch_pieces(source, settings, cell_size)
+        surface_p95 = bidirectional_surface_p95(source, pieces, settings.surface_samples)
+        metrics = {
+            **metrics,
+            "refinement": refinement,
+            "surface_p95_m": surface_p95,
+        }
+        if surface_p95 <= settings.surface_p95_threshold_m:
+            return pieces, surface_p95, metrics
+        last_p95 = surface_p95
+        last_metrics = metrics
+        cell_size *= 0.5
+    raise CollisionError(
+        f"surface patch p95 {last_p95:.9g} m exceeds "
+        f"{settings.surface_p95_threshold_m:.9g} m after "
+        f"{settings.surface_patch_refinements + 1} resolutions; "
+        f"last metrics={last_metrics}"
+    )
+
+
 def _cache_key(source_hash: str, scale: tuple[float, float, float], settings: CollisionSettings) -> str:
     payload = {
         "source_mesh_sha256": source_hash,
@@ -339,7 +554,7 @@ def _cache_key(source_hash: str, scale: tuple[float, float, float], settings: Co
         "seed": settings.seed,
         "max_pieces": settings.max_pieces,
         "max_vertices": settings.max_vertices,
-        "coacd_params": settings.coacd_kwargs(),
+        "settings": settings.manifest_settings(),
         "surface_samples": settings.surface_samples,
         "surface_p95_threshold_m": settings.surface_p95_threshold_m,
     }
@@ -362,12 +577,12 @@ def _artifact_from_cache(
             or manifest.get("source_mesh_sha256") != source_hash
             or tuple(manifest.get("scale", ())) != scale
             or manifest.get("coacd_version") != _coacd_version()
-            or manifest.get("settings") != settings.coacd_kwargs()
+            or manifest.get("settings") != settings.manifest_settings()
             or int(manifest.get("surface_samples", settings.surface_samples)) != settings.surface_samples
         ):
             return None
         records = manifest["pieces"]
-        if not isinstance(records, list) or not 1 <= len(records) <= settings.max_pieces:
+        if not isinstance(records, list) or not 1 <= len(records) <= settings.published_max_pieces:
             return None
         paths: list[Path] = []
         hashes: list[str] = []
@@ -385,6 +600,7 @@ def _artifact_from_cache(
             if len(vertices) > settings.max_vertices or not np.isfinite(vertices).all():
                 return None
             piece = trimesh.Trimesh(vertices=vertices, faces=faces, process=False)
+            piece.fix_normals()
             volume = abs(float(piece.volume))
             if not np.isfinite(volume) or volume <= 0 or not np.isclose(volume, float(item["volume"])):
                 return None
@@ -443,20 +659,24 @@ def decompose_mesh(
     if final_dir.exists():
         shutil.rmtree(final_dir)
 
-    try:
-        os.environ["OMP_NUM_THREADS"] = "1"
-        result = coacd.run_coacd(
-            coacd.Mesh(
-                vertices=np.ascontiguousarray(source.vertices, dtype=np.float64),
-                indices=np.ascontiguousarray(source.faces, dtype=np.int32),
-            ),
-            **settings.coacd_kwargs(),
-        )
-    except Exception as exc:
-        raise CollisionError(f"CoACD decomposition failed: {exc}") from exc
-
-    if not result:
-        raise CollisionError("CoACD returned empty decomposition")
+    patch_metrics: dict[str, Any] = {}
+    if settings.method == "surface_patch":
+        proxy_meshes, surface_p95, patch_metrics = _decompose_surface_patches(source, settings)
+        result = [(piece.vertices, piece.faces) for piece in proxy_meshes]
+    else:
+        try:
+            os.environ["OMP_NUM_THREADS"] = "1"
+            result = coacd.run_coacd(
+                coacd.Mesh(
+                    vertices=np.ascontiguousarray(source.vertices, dtype=np.float64),
+                    indices=np.ascontiguousarray(source.faces, dtype=np.int32),
+                ),
+                **settings.coacd_kwargs(),
+            )
+        except Exception as exc:
+            raise CollisionError(f"CoACD decomposition failed: {exc}") from exc
+        if not result:
+            raise CollisionError("CoACD returned empty decomposition")
     canonical: list[tuple[str, bytes, np.ndarray, np.ndarray, float]] = []
     for piece in result:
         try:
@@ -464,6 +684,7 @@ def decompose_mesh(
             if len(vertices) > settings.max_vertices:
                 raise CollisionError("CoACD piece exceeds max vertices")
             piece_mesh = trimesh.Trimesh(vertices=vertices, faces=faces, process=False)
+            piece_mesh.fix_normals()
             volume = abs(float(piece_mesh.volume))
             if not np.isfinite(volume) or volume <= 0:
                 raise CollisionError("CoACD piece has non-positive volume")
@@ -473,15 +694,30 @@ def decompose_mesh(
             raise
         except Exception as exc:
             raise CollisionError(f"invalid CoACD output: {exc}") from exc
-    if len(canonical) > settings.max_pieces:
-        raise CollisionError("CoACD output exceeds max pieces")
+    if len(canonical) > settings.published_max_pieces:
+        raise CollisionError(
+            f"{settings.method} output exceeds {settings.published_max_pieces} pieces"
+        )
     canonical.sort(key=lambda item: item[0])
-    proxy_meshes = [trimesh.Trimesh(vertices=item[2], faces=item[3], process=False) for item in canonical]
+    # Measure the canonical, hash-sorted pieces that will actually be cached;
+    # sampling a concatenated mesh is order-sensitive, so measuring an
+    # unsorted in-memory list would make cache validation nondeterministic.
+    proxy_meshes = [
+        trimesh.Trimesh(vertices=item[2], faces=item[3], process=False)
+        for item in canonical
+    ]
     surface_p95 = bidirectional_surface_p95(source, proxy_meshes, settings.surface_samples)
     if surface_p95 > settings.surface_p95_threshold_m:
         raise CollisionError(
-            f"collision surface p95 {surface_p95:.9g} m exceeds {settings.surface_p95_threshold_m:.9g} m"
+            f"collision surface p95 {surface_p95:.9g} m exceeds "
+            f"{settings.surface_p95_threshold_m:.9g} m"
         )
+    metrics = {
+        **patch_metrics,
+        "method": settings.method,
+        "piece_count": len(canonical),
+        "surface_p95_m": surface_p95,
+    }
 
     temp_dir = Path(tempfile.mkdtemp(prefix=f".{key}.", dir=root))
     try:
@@ -495,9 +731,9 @@ def decompose_mesh(
             "source_mesh_sha256": source_hash,
             "scale": scale,
             "coacd_version": _coacd_version(),
-            "settings": settings.coacd_kwargs(),
+            "settings": settings.manifest_settings(),
             "surface_p95": surface_p95,
-            "metrics": {"piece_count": len(canonical), "surface_p95_m": surface_p95},
+            "metrics": metrics,
             "pieces": piece_records,
         }
         manifest_bytes = (_canonical_json(manifest) + "\n").encode("utf-8")
@@ -533,4 +769,6 @@ def decompose_mesh(
 def load_collision_piece(path: str | Path) -> trimesh.Trimesh:
     """Load a deterministic cache piece for downstream MJCF generation."""
     vertices, faces = _read_mesh_bytes(Path(path).read_bytes())
-    return trimesh.Trimesh(vertices=vertices, faces=faces, process=False)
+    piece = trimesh.Trimesh(vertices=vertices, faces=faces, process=False)
+    piece.fix_normals()
+    return piece

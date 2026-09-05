@@ -33,6 +33,12 @@ FILES = (
     "actuator_calibration.yaml",
 )
 _AXIS_RE = re.compile(r".+_axis_[012]$")
+_HAND_LINK_RE = re.compile(r"^[lr]_", re.IGNORECASE)
+
+
+def _is_hand_link(link_name: str) -> bool:
+    """Use the authoritative URDF naming contract for hand links."""
+    return bool(_HAND_LINK_RE.match(link_name))
 
 
 class ArtifactError(ValueError):
@@ -284,10 +290,23 @@ def _compile_collisions(
         (output_root / "collision_manifest.yaml").write_bytes(_yaml_bytes(document))
         return assets, document
 
-    # Collision-only decimation keeps every quality-gated piece within the
-    # fixed 64-vertex limit; visual meshes are copied byte-for-byte below.
-    arm_settings = CollisionSettings(decimate=True, surface_p95_threshold_m=0.003)
-    hand_settings = CollisionSettings(decimate=True, surface_p95_threshold_m=0.0015)
+    # Collision-only surface patches keep every quality-gated convex piece
+    # within the fixed 64-vertex limit.  CoACD remains available through the
+    # public collision API, but its bounded hull budget cannot certify the
+    # vendor's highly tessellated meshes; the adaptive patch backend publishes
+    # only artifacts that pass the same measured surface gate.
+    arm_settings = CollisionSettings(
+        method="surface_patch",
+        surface_patch_cell_size_m=0.016,
+        surface_patch_extrusion_m=0.00015,
+        surface_p95_threshold_m=0.003,
+    )
+    hand_settings = CollisionSettings(
+        method="surface_patch",
+        surface_patch_cell_size_m=0.0045,
+        surface_patch_extrusion_m=0.00015,
+        surface_p95_threshold_m=0.0015,
+    )
     collision_dir = output_root / "collision"
     collision_dir.mkdir(parents=True, exist_ok=True)
     artifacts: dict[tuple[str, tuple[float, float, float], float], CollisionArtifact] = {}
@@ -295,7 +314,7 @@ def _compile_collisions(
     records: list[dict[str, Any]] = []
     copied: set[str] = set()
     for link in model.links:
-        settings = hand_settings if re.search(r"(?:hand|thumb|finger|palm)", link.name, re.IGNORECASE) else arm_settings
+        settings = hand_settings if _is_hand_link(link.name) else arm_settings
         for index, geometry in enumerate(link.collisions):
             key = (str(geometry.path.resolve()), tuple(float(item) for item in geometry.scale), settings.surface_p95_threshold_m)
             artifact = artifacts.get(key)
@@ -310,7 +329,7 @@ def _compile_collisions(
             expected_source = _sha256(geometry.path)
             if artifact.source_sha256 != expected_source:
                 raise ArtifactError(f"collision source hash mismatch for {link.name}[{index}]")
-            if len(artifact.pieces) == 0 or len(artifact.pieces) > settings.max_pieces:
+            if len(artifact.pieces) == 0 or len(artifact.pieces) > settings.published_max_pieces:
                 raise ArtifactError(f"invalid collision piece count for {link.name}[{index}]")
             names: list[str] = []
             piece_records: list[dict[str, Any]] = []
@@ -353,7 +372,7 @@ def _compile_collisions(
                 "cache_key": artifact.cache_key,
                 "surface_p95_m": float(artifact.surface_p95),
                 "surface_p95_threshold_m": settings.surface_p95_threshold_m,
-                "settings": settings.coacd_kwargs(),
+                "settings": settings.manifest_settings(),
                 "piece_count": len(names),
                 "pieces": piece_records,
                 "metrics": dict(artifact.metrics),
@@ -362,7 +381,7 @@ def _compile_collisions(
     document = {
         "version": 1,
         "source_urdf_sha256": _sha256(model.source_path),
-        "settings": arm_settings.coacd_kwargs(),
+        "settings": arm_settings.manifest_settings(),
         "surface_p95_thresholds_m": {"arm_base": 0.003, "hands": 0.0015},
         "records": records,
     }
@@ -817,7 +836,7 @@ def verify_contact_qualified(
                 f"collision surface p95 exceeds gate for {record.get('link')}: "
                 f"{p95!r} > {threshold!r}"
             )
-        expected_threshold = 0.0015 if re.search(r"(?:hand|thumb|finger|palm)", link, re.IGNORECASE) else 0.003
+        expected_threshold = 0.0015 if _is_hand_link(link) else 0.003
         if not np.isclose(float(threshold), expected_threshold):
             raise ArtifactError(
                 f"collision threshold policy differs for {link}[{collision_index}]: "

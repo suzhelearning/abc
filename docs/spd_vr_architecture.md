@@ -118,8 +118,12 @@ cached observation/action projections for ten Euler steps and returns one
 ## Collision qualification
 
 The compiler supports `--raw-collisions` only for fast visualization and
-control-chain tests. Contact-data collection requires the default CoACD path
-and its collision-manifest quality checks to pass for every mesh. A successful
+control-chain tests. Contact-data collection uses the deterministic adaptive
+convex-surface-patch backend by default: welded connected components are
+spatially partitioned, convex pieces are recursively bounded to 64 vertices,
+and every published record is measured against the bidirectional surface p95
+gate. The lower-level CoACD backend remains available for diagnostics and
+explicit callers, but a CoACD miss never falls back silently. A successful
 raw build is not evidence of contact accuracy.
 `spd-model --verify --verify-contact` and any live run with `--record-to`
 enforce this gate; raw or unqualified artifacts are rejected before the
