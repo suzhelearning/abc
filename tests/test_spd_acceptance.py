@@ -58,6 +58,41 @@ def test_acceptance_reports_unrequested_data_without_claiming_collection(tmp_pat
     assert "not requested" in episodes.detail
 
 
+def test_acceptance_can_require_a_contact_eligible_training_segment(tmp_path, monkeypatch):
+    episode = tmp_path / "episode.hdf5"
+    episode.write_bytes(b"synthetic placeholder")
+    manifest = {
+        "raw_frames": 600,
+        "training_frames": 20,
+        "contact_filter": {
+            "training_eligible_frames": 0,
+            "training_segments": 0,
+        },
+    }
+    monkeypatch.setattr(acceptance, "validate_episode", lambda path, verify_checksums: manifest)
+
+    rejected = acceptance._check_episode(
+        episode,
+        verify_checksums=True,
+        require_usable_training=True,
+    )
+    assert rejected.ok is False
+    assert "usable contact-eligible training segment" in rejected.detail
+    assert rejected.metrics["training_segments"] == 0
+
+    manifest["contact_filter"] = {
+        "training_eligible_frames": 12,
+        "training_segments": 1,
+    }
+    accepted = acceptance._check_episode(
+        episode,
+        verify_checksums=True,
+        require_usable_training=True,
+    )
+    assert accepted.ok is True
+    assert accepted.metrics["contact_eligible_frames"] == 12
+
+
 def test_model_builder_uses_repository_root_and_single_compiler(monkeypatch, tmp_path):
     from spd_vr import model_builder
 

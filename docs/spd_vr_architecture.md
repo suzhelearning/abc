@@ -140,7 +140,10 @@ six-scene/17-task deterministic registry, model and optional contact gate, and
 an explicitly supplied HDF5 file/directory (including checksums).  With
 `--replay` it restores full MuJoCo state and checks the recorded model hash;
 without `--episodes` it reports data acceptance as not requested rather than
-inventing a pass.
+inventing a pass.  Formal data acceptance should add
+`--require-usable-training`, which rejects a structurally valid but entirely
+idle episode with no contact-eligible 30 Hz segment; synthetic idle smoke may
+omit that opt-in gate but is never equivalent to a demonstration dataset.
 
 `spd-sim-benchmark` measures the MuJoCo/MJWarp control tick (480 Hz physics,
 60 Hz control) with optional camera rendering.  It is a timing diagnostic only;

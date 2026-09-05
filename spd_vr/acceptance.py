@@ -170,21 +170,50 @@ def _check_artifacts(
     return artifact, AcceptanceResult("contact_gate", True, "all collision records pass surface gate", report)
 
 
-def _check_episode(path: Path, *, verify_checksums: bool) -> AcceptanceResult:
+def _check_episode(
+    path: Path,
+    *,
+    verify_checksums: bool,
+    require_usable_training: bool = False,
+) -> AcceptanceResult:
     try:
         manifest = validate_episode(path, verify_checksums=verify_checksums)
     except Exception as exc:
         return AcceptanceResult("episode", False, f"{path}: {exc}")
+    contact_filter = manifest.get("contact_filter")
+    if not isinstance(contact_filter, Mapping):
+        return AcceptanceResult("episode", False, f"{path}: contact_filter is missing")
+    contact_eligible_frames = contact_filter.get("training_eligible_frames", 0)
+    training_segments = contact_filter.get("training_segments", 0)
+    if (
+        isinstance(contact_eligible_frames, bool)
+        or not isinstance(contact_eligible_frames, int)
+        or contact_eligible_frames < 0
+        or isinstance(training_segments, bool)
+        or not isinstance(training_segments, int)
+        or training_segments < 0
+    ):
+        return AcceptanceResult("episode", False, f"{path}: contact_filter training metrics are invalid")
+    metrics = {
+        "path": str(path),
+        "raw_frames": int(manifest.get("raw_frames", 0)),
+        "training_frames": int(manifest.get("training_frames", 0)),
+        "contact_eligible_frames": int(contact_eligible_frames),
+        "training_segments": int(training_segments),
+        "checksum_verified": bool(verify_checksums),
+    }
+    if require_usable_training and (contact_eligible_frames <= 0 or training_segments <= 0):
+        return AcceptanceResult(
+            "episode",
+            False,
+            f"{path}: no usable contact-eligible training segment",
+            metrics,
+        )
     return AcceptanceResult(
         "episode",
         True,
         f"validated {path}",
-        {
-            "path": str(path),
-            "raw_frames": int(manifest.get("raw_frames", 0)),
-            "training_frames": int(manifest.get("training_frames", 0)),
-            "checksum_verified": bool(verify_checksums),
-        },
+        metrics,
     )
 
 
@@ -232,6 +261,7 @@ def run_acceptance(
     seed_count: int = 1,
     require_contact: bool = False,
     verify_checksums: bool = True,
+    require_usable_training: bool = False,
     replay: bool = False,
     replay_tolerance: float = 1e-6,
     render: bool = False,
@@ -265,7 +295,14 @@ def run_acceptance(
     if not episodes:
         results.append(AcceptanceResult("episodes", False, f"no HDF5 episodes found under {episodes_path}"))
         return results
-    episode_results = [_check_episode(path, verify_checksums=verify_checksums) for path in episodes]
+    episode_results = [
+        _check_episode(
+            path,
+            verify_checksums=verify_checksums,
+            require_usable_training=require_usable_training,
+        )
+        for path in episodes
+    ]
     failed = [result for result in episode_results if not result.ok]
     results.append(
         AcceptanceResult(
@@ -307,6 +344,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--seed-count", type=int, default=1)
     parser.add_argument("--max-episodes", type=int, default=None)
     parser.add_argument("--require-contact", action="store_true")
+    parser.add_argument(
+        "--require-usable-training",
+        action="store_true",
+        help="fail episode acceptance when no contact-eligible 30 Hz training segment exists",
+    )
     parser.add_argument("--no-checksums", action="store_true")
     parser.add_argument("--replay", action="store_true")
     parser.add_argument("--render", action="store_true")
@@ -324,6 +366,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             seed_count=args.seed_count,
             require_contact=args.require_contact,
             verify_checksums=not args.no_checksums,
+            require_usable_training=args.require_usable_training,
             replay=args.replay,
             replay_tolerance=args.replay_tolerance,
             render=args.render,

@@ -210,12 +210,16 @@ episode with checksums; `--replay` additionally restores full MuJoCo state:
 ```bash
 uv run spd-vr-acceptance --seed-count 3 --episodes cache/spd/train \
   --manifest generated/spd_vr/model_manifest.yaml \
-  --urdf assets/tianji_wuji2/tianji_wuji2.urdf --require-contact --replay
+  --urdf assets/tianji_wuji2/tianji_wuji2.urdf --require-contact \
+  --require-usable-training --replay
 ```
 
 No `--episodes` means the data portion is reported as not requested.  Passing
 an empty episode directory, a malformed episode, an unqualified collision
-manifest, or a replay/model hash mismatch returns non-zero.
+manifest, a replay/model hash mismatch, or (when requested) an episode with no
+contact-eligible 30 Hz training segment returns non-zero.  Synthetic idle
+smoke can omit `--require-usable-training`; it must not be reported as formal
+demonstration data.
 
 For a simulation-only real-time diagnostic (no HDF5 publication), run:
 
