@@ -77,6 +77,7 @@ class EpisodeController:
         seed: int = 0,
         recorder: Any | None = None,
         run_metadata: Mapping[str, Any] | None = None,
+        collection_identity: Mapping[str, Any] | None = None,
     ) -> None:
         self.simulator = simulator
         self.task_spec = task_spec
@@ -84,6 +85,7 @@ class EpisodeController:
         self.recorder = recorder
         self._has_run_metadata = run_metadata is not None
         self.run_metadata = copy.deepcopy(dict(run_metadata or {}))
+        self.collection_identity = self._validate_collection_identity(collection_identity)
         self.state = EpisodeState.IDLE
         self.state_epoch = 0
         self.episode_id = 0
@@ -93,6 +95,28 @@ class EpisodeController:
         self._rng = np.random.default_rng(self.seed)
         self._manifest: dict[str, Any] | None = None
         self.last_error: str | None = None
+
+    @staticmethod
+    def _validate_collection_identity(
+        value: Mapping[str, Any] | None,
+    ) -> dict[str, str]:
+        """Validate the formal collection fields before an episode starts."""
+
+        if value is None:
+            return {}
+        if not isinstance(value, Mapping):
+            raise TypeError("collection_identity must be a mapping")
+        from .collection import COLLECTION_METADATA_KEYS, collection_metadata
+
+        unknown = set(value).difference(COLLECTION_METADATA_KEYS)
+        if unknown:
+            names = ", ".join(sorted(str(item) for item in unknown))
+            raise ValueError(f"collection_identity contains unknown fields: {names}")
+        return collection_metadata(
+            run_id=value.get("run_id"),
+            operator_id=value.get("operator_id"),
+            pico_serial=value.get("pico_serial"),
+        )
 
     @property
     def manifest(self) -> dict[str, Any] | None:
@@ -211,6 +235,8 @@ class EpisodeController:
         self._manifest = copy.deepcopy(scene_result.manifest())
         if self._has_run_metadata:
             self._manifest["teleop"] = copy.deepcopy(self.run_metadata)
+        if self.collection_identity:
+            self._manifest["collection"] = copy.deepcopy(self.collection_identity)
         reset_scene = getattr(self.simulator, "reset_scene", None)
         if reset_scene is not None:
             reset_scene(scene_result)

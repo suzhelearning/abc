@@ -262,9 +262,23 @@ class _EpisodeRecorder:
 def test_episode_state_machine_guards_contact_and_supports_revert_pause_skip():
     simulation = _EpisodeSimulator()
     recorder = _EpisodeRecorder()
-    controller = EpisodeController(simulation, _EpisodeTask(), recorder=recorder)
+    controller = EpisodeController(
+        simulation,
+        _EpisodeTask(),
+        recorder=recorder,
+        collection_identity={
+            "run_id": "run-001",
+            "operator_id": "operator-01",
+            "pico_serial": "pico-01",
+        },
+    )
     controller.enqueue(EpisodeCommandType.START)
     assert controller.process_one() == "started"
+    assert recorder.manifest["collection"] == {
+        "run_id": "run-001",
+        "operator_id": "operator-01",
+        "pico_serial": "pico-01",
+    }
     controller.enqueue(EpisodeCommandType.CHECKPOINT)
     assert controller.process_one() == "checkpoint rejected while hand-object contact is active"
     simulation.contact = False
