@@ -165,6 +165,10 @@ the same registry into all 17 Table-2 task quotas and 1,916 deterministic
 episode IDs (75.25 qualified hours), but remains explicitly
 `data_collected: false`; only HDF5 episodes accepted by the collection audit
 can contribute to the formal target.
+The viewer, direct live loop and three-window launcher can bind a recording to
+one plan episode; task, reset seed and (when present) collection identity are
+checked before the writer opens, and the plan path/hash are preserved in the
+episode manifest.
 
 `spd-vr-evaluation` converts reviewed binary rollout outcomes into a strict
 17-task report covering the full policy and the five planned ablations. It

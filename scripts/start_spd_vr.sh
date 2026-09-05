@@ -20,6 +20,8 @@ require_usable_training=0
 collection_run_id=""
 operator_id=""
 pico_serial=""
+collection_plan=""
+episode_id=""
 scene_manifest=""
 router_timeout=300
 mode="detach"
@@ -52,6 +54,8 @@ Start options:
   --collection-run-id ID   formal collection run identifier (requires the next two fields)
   --operator-id ID         formal collection operator identifier
   --pico-serial ID         PICO serial for the collection ledger
+  --collection-plan PATH   reviewed deterministic collection plan JSON
+  --episode-id ID          planned episode ID from --collection-plan
   --router-timeout SEC     wait for the viewer Zenoh router before clients (default 300)
   --preflight              run read-only PICO, dependency, artifact, and port checks before tmux
 EOF
@@ -85,6 +89,8 @@ while (($#)); do
     --collection-run-id) need_value "$@"; collection_run_id="$2"; shift 2 ;;
     --operator-id) need_value "$@"; operator_id="$2"; shift 2 ;;
     --pico-serial) need_value "$@"; pico_serial="$2"; shift 2 ;;
+    --collection-plan) need_value "$@"; collection_plan="$2"; shift 2 ;;
+    --episode-id) need_value "$@"; episode_id="$2"; shift 2 ;;
     --router-timeout) need_value "$@"; router_timeout="$2"; shift 2 ;;
     --preflight) run_preflight=1; shift ;;
     --help|-h) usage; exit 0 ;;
@@ -108,6 +114,16 @@ fi
 if ((collection_fields == 3)) && [[ -z "$record_to" ]]; then
   echo "collection metadata requires --record-to" >&2
   exit 2
+fi
+if [[ -n "$collection_plan" || -n "$episode_id" ]]; then
+  if [[ -z "$collection_plan" || -z "$episode_id" ]]; then
+    echo "--collection-plan and --episode-id must be supplied together" >&2
+    exit 2
+  fi
+  if [[ -z "$record_to" || -z "$scene_manifest" ]]; then
+    echo "--collection-plan requires --record-to and --scene-manifest" >&2
+    exit 2
+  fi
 fi
 
 if [[ "$action" == "status" ]]; then
@@ -159,6 +175,9 @@ fi
 if [[ -n "$scene_manifest" ]]; then
   viewer_command+=(--scene-manifest "$scene_manifest")
 fi
+if [[ -n "$collection_plan" ]]; then
+  viewer_command+=(--collection-plan "$collection_plan" --episode-id "$episode_id")
+fi
 if [[ -n "$record_to" ]]; then
   viewer_command+=(--record-to "$record_to")
 fi
@@ -197,6 +216,9 @@ for required in "${required_files[@]}"; do
 done
 if [[ -n "$scene_manifest" ]]; then
   [[ -f "$scene_manifest" ]] || { echo "scene manifest is missing: $scene_manifest" >&2; exit 1; }
+fi
+if [[ -n "$collection_plan" ]]; then
+  [[ -f "$collection_plan" ]] || { echo "collection plan is missing: $collection_plan" >&2; exit 1; }
 fi
 if ((run_preflight)); then
   preflight_command=(uv run spd-vr-preflight --repo-root "$repo_root" \

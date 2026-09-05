@@ -22,6 +22,7 @@ import numpy as np
 
 from .config import TeleopConfig
 from .collection import collection_metadata
+from .collection_plan import load_collection_plan, planned_episode
 from .data import EpisodeWriter
 from .robot import RobotSpec
 from .scenes.manifest import load_scene_manifest
@@ -360,6 +361,27 @@ def run(args: argparse.Namespace) -> int:
     urdf_path = args.urdf.resolve()
     root = Path(__file__).resolve().parents[1]
     scene_manifest = load_scene_manifest(args.scene_manifest) if args.scene_manifest else None
+    collection_plan = None
+    planned = None
+    if args.collection_plan is not None:
+        if args.record_to is None:
+            raise ValueError("--collection-plan requires --record-to")
+        if not isinstance(args.episode_id, str) or not args.episode_id.strip():
+            raise ValueError("--collection-plan requires --episode-id")
+        if scene_manifest is None:
+            raise ValueError("--collection-plan requires --scene-manifest")
+        collection_plan = load_collection_plan(args.collection_plan)
+        planned = planned_episode(collection_plan, args.episode_id.strip())
+        if scene_manifest.get("task") != planned["task"]:
+            raise ValueError(
+                "scene manifest task does not match collection-plan episode "
+                f"{planned['episode_id']}: {planned['task']}"
+            )
+        reset = scene_manifest.get("reset")
+        if not isinstance(reset, dict) or reset.get("seed") != planned["seed"]:
+            raise ValueError("scene manifest seed does not match collection-plan episode")
+    elif args.episode_id is not None:
+        raise ValueError("--episode-id requires --collection-plan")
     if scene_manifest is not None:
         scene_model = scene_manifest.get("model")
         if (
@@ -402,6 +424,10 @@ def run(args: argparse.Namespace) -> int:
         operator_id=args.operator_id,
         pico_serial=args.pico_serial,
     )
+    if planned is not None:
+        planned_identity = collection_plan.get("collection_identity")
+        if planned_identity is not None and identity != planned_identity:
+            raise ValueError("runtime collection identity does not match collection plan")
     if identity and args.record_to is None:
         raise ValueError("collection metadata requires --record-to")
     writer = None
@@ -426,6 +452,16 @@ def run(args: argparse.Namespace) -> int:
             "canonical_joint_order": list(robot.joint_names),
             "scene_manifest": scene_manifest,
         }
+        if planned is not None:
+            plan_path = args.collection_plan.resolve()
+            manifest["episode_id"] = planned["episode_id"]
+            manifest["collection_plan"] = {
+                "path": str(plan_path),
+                "sha256": _sha256(plan_path),
+                "episode_id": planned["episode_id"],
+                "seed": planned["seed"],
+                "task": planned["task"],
+            }
         if identity:
             manifest["collection"] = identity
         writer = EpisodeWriter(
@@ -541,6 +577,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--collection-run-id", help="formal collection run identifier")
     parser.add_argument("--operator-id", help="formal collection operator identifier")
     parser.add_argument("--pico-serial", help="PICO device serial for the collection ledger")
+    parser.add_argument("--collection-plan", type=Path, help="approved SPD-VR collection plan JSON")
+    parser.add_argument("--episode-id", help="episode ID from --collection-plan")
     parser.add_argument(
         "--require-usable-training",
         action="store_true",

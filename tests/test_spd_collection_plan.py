@@ -5,7 +5,9 @@ import pytest
 from spd_vr.collection_plan import (
     COLLECTION_PLAN_SCHEMA,
     build_collection_plan,
+    load_collection_plan,
     main,
+    planned_episode,
     validate_collection_plan,
 )
 
@@ -57,3 +59,13 @@ def test_collection_plan_cli_writes_audit_ready_json(tmp_path, capsys):
     assert document["status"] == "planned"
     printed = json.loads(capsys.readouterr().out)
     assert printed["episode_count"] == 1916
+
+
+def test_collection_plan_lookup_rejects_unknown_episode(tmp_path):
+    plan = build_collection_plan(seed_start=4)
+    path = tmp_path / "plan.json"
+    path.write_text(json.dumps(plan), encoding="utf-8")
+    loaded = load_collection_plan(path)
+    assert planned_episode(loaded, "jenga--hollow_tower-0001")["seed"] == 4
+    with pytest.raises(ValueError, match="not present"):
+        planned_episode(loaded, "not-in-plan")

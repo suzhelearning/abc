@@ -319,6 +319,12 @@ def test_three_window_launcher_fake_source_shutdown_option_is_wired():
             "operator-01",
             "--pico-serial",
             "pico-01",
+            "--collection-plan",
+            "/tmp/collection-plan.json",
+            "--episode-id",
+            "jenga--hollow_tower-0001",
+            "--scene-manifest",
+            "/tmp/scene.json",
             "--model",
             "/tmp/unified.xml",
             "--arm-model",
@@ -338,6 +344,8 @@ def test_three_window_launcher_fake_source_shutdown_option_is_wired():
     assert "--collection-run-id run-001" in result.stdout
     assert "--operator-id operator-01" in result.stdout
     assert "--pico-serial pico-01" in result.stdout
+    assert "--collection-plan /tmp/collection-plan.json" in result.stdout
+    assert "--episode-id jenga--hollow_tower-0001" in result.stdout
 
     rejected = subprocess.run(
         [str(script), "--dry-run", "--wait-for-shutdown"],
@@ -392,3 +400,30 @@ def test_three_window_launcher_fake_source_shutdown_option_is_wired():
     )
     assert collection_without_record.returncode == 2
     assert "requires --record-to" in collection_without_record.stderr
+
+    partial_plan = subprocess.run(
+        [str(script), "--dry-run", "--collection-plan", "/tmp/plan.json"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert partial_plan.returncode == 2
+    assert "must be supplied together" in partial_plan.stderr
+
+    plan_without_scene = subprocess.run(
+        [
+            str(script),
+            "--dry-run",
+            "--collection-plan",
+            "/tmp/plan.json",
+            "--episode-id",
+            "jenga--hollow_tower-0001",
+            "--record-to",
+            "/tmp/episode.hdf5",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert plan_without_scene.returncode == 2
+    assert "requires --record-to and --scene-manifest" in plan_without_scene.stderr

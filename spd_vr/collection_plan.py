@@ -273,6 +273,31 @@ def validate_collection_plan(document: Mapping[str, Any]) -> dict[str, Any]:
     return dict(document)
 
 
+def load_collection_plan(path: str | Path) -> dict[str, Any]:
+    """Load and validate one approved pre-recording plan."""
+
+    plan_path = Path(path).expanduser().resolve()
+    try:
+        document = json.loads(plan_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"cannot read collection plan: {plan_path}") from exc
+    if not isinstance(document, Mapping):
+        raise ValueError("collection plan must be a JSON object")
+    return validate_collection_plan(document)
+
+
+def planned_episode(document: Mapping[str, Any], episode_id: str) -> dict[str, Any]:
+    """Return one planned episode, rejecting unknown or duplicate IDs."""
+
+    if not isinstance(episode_id, str) or not episode_id.strip():
+        raise ValueError("episode_id must be a non-empty string")
+    plan = validate_collection_plan(document)
+    matches = [item for item in plan["episodes"] if item.get("episode_id") == episode_id]
+    if len(matches) != 1:
+        raise ValueError(f"episode_id is not present in collection plan: {episode_id}")
+    return dict(matches[0])
+
+
 def _write_json_atomic(path: Path, document: Mapping[str, Any]) -> None:
     path = path.expanduser()
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -325,11 +350,12 @@ def main(argv: Sequence[str] | None = None) -> int:
 __all__ = [
     "COLLECTION_PLAN_SCHEMA",
     "build_collection_plan",
+    "load_collection_plan",
     "main",
+    "planned_episode",
     "validate_collection_plan",
 ]
 
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

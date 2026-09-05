@@ -138,7 +138,10 @@ scripts/start_spd_vr.sh --detach --preflight \
   --model generated/spd_vr/unified_plant.xml \
   --arm-model generated/spd_vr/arm_ik.xml \
   --urdf assets/tianji_wuji2/tianji_wuji2.urdf \
+  --scene-manifest /lab-runs/<run-id>/scene.json \
   --record-to /lab-runs/<run-id>/episode.hdf5 \
+  --collection-plan /lab-runs/<run-id>/collection-plan.json \
+  --episode-id <planned-episode-id> \
   --collection-run-id <run-id> \
   --operator-id <operator-id> \
   --pico-serial <pico-device-id> \
