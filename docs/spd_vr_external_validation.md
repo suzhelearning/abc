@@ -358,10 +358,12 @@ cannot authorize hardware actuation.
 After the records above have been archived, put their paths in a versioned
 `release.json` manifest with `schema_version: 1`, a 40-character `git_commit`,
 and entries named `vendor_terms`, `dino_provenance`, `policy_benchmark`,
-`training_resume`, `collection_audit`, `evaluation`, and `safety_review`.
+`training_resume`, `collection_plan`, `collection_audit`, `evaluation`, and
+`safety_review`.
 The executable gate checks those records, validates the DINO provenance against
 the exact checkpoint, requires compiled p95/peak-memory evidence, requires the
-8-GPU/170k-step and 75-hour/all-task claims, and requires five planned
+8-GPU/170k-step and 75-hour/all-task claims, requires the approved planned
+collection schedule, and requires five planned
 ablations plus confidence intervals:
 
 ```bash

@@ -17,6 +17,7 @@ from pathlib import Path
 import re
 from typing import Any, Mapping, Sequence
 
+from .collection_plan import validate_collection_plan
 from .evaluation import validate_evaluation_report
 from .policy_benchmark import validate_checkpoint_provenance
 
@@ -28,6 +29,7 @@ EVIDENCE_KEYS = (
     "policy_benchmark",
     "training_resume",
     "collection_audit",
+    "collection_plan",
     "evaluation",
     "safety_review",
 )
@@ -181,6 +183,18 @@ def _check_collection(document: Mapping[str, Any]) -> ReleaseCheck:
     return ReleaseCheck("collection_audit", True, f"{qualified:g} qualified hours and all registered tasks are present")
 
 
+def _check_collection_plan(document: Mapping[str, Any]) -> ReleaseCheck:
+    try:
+        plan = validate_collection_plan(document)
+    except Exception as exc:
+        return ReleaseCheck("collection_plan", False, str(exc))
+    return ReleaseCheck(
+        "collection_plan",
+        True,
+        f"{plan['task_count']} tasks and {plan['episode_count']} planned episodes are bound",
+    )
+
+
 def _check_evaluation(
     document: Mapping[str, Any],
     *,
@@ -263,6 +277,8 @@ def audit_release(
         checks.append(_check_training(evidence["training_resume"]))
     if "collection_audit" in evidence:
         checks.append(_check_collection(evidence["collection_audit"]))
+    if "collection_plan" in evidence:
+        checks.append(_check_collection_plan(evidence["collection_plan"]))
     if "evaluation" in evidence:
         checks.append(
             _check_evaluation(

@@ -5,6 +5,7 @@ from spd_vr.evaluation import PLANNED_ABLATIONS, build_evaluation_report
 from spd_vr.policy_benchmark import EXPECTED_DINO_MODEL_ID
 from spd_vr.release import audit_release
 from spd_vr.scenes.registry import TASK_REGISTRY
+from spd_vr.collection_plan import build_collection_plan
 
 
 def _write_json(path, value):
@@ -66,6 +67,7 @@ def _evidence(tmp_path):
             "target_hours": 75,
         },
     )
+    _write_json(tmp_path / "collection-plan.json", build_collection_plan())
     _write_json(
         tmp_path / "evaluation.json",
         build_evaluation_report(
@@ -99,6 +101,7 @@ def _evidence(tmp_path):
         "policy_benchmark": "benchmark.json",
         "training_resume": "training.json",
         "collection_audit": "collection.json",
+        "collection_plan": "collection-plan.json",
         "evaluation": "evaluation.json",
         "safety_review": "safety.json",
     }
@@ -127,6 +130,7 @@ def test_release_audit_accepts_complete_archived_evidence(tmp_path):
         "policy_benchmark",
         "training_resume",
         "collection_audit",
+        "collection_plan",
         "evaluation",
         "safety_review",
     }
