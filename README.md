@@ -251,7 +251,10 @@ uv run spd-vr-dataset-audit cache/spd/train \
 The live and three-window viewer accept `--collection-run-id`,
 `--operator-id`, and `--pico-serial` and persist them in the episode manifest;
 all three are required together for a formal identity record. The aggregate
-gate counts only contact-qualified duration, never idle file length.
+gate counts only contact-qualified duration, never idle file length. Code that
+uses the reusable `EpisodeController`/`EpisodeRecorder` path can pass the same
+three fields as `collection_identity`; the state machine validates and writes
+the identical `manifest["collection"]` record.
 
 For a simulation-only real-time diagnostic (no HDF5 publication), run:
 

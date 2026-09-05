@@ -47,7 +47,9 @@ Accepted targets are also rate-limited from URDF joint velocity limits at the
   optional ABC `MJWarpSim` stepping adapter.
 - `spd_vr/data.py`: the only episode schema and the only 30 Hz training sampler.
 - `spd_vr/episode.py`, `spd_vr/recorder.py`: checkpoint/pause/revert/skip
-  state machine and lifecycle adapter around the same atomic HDF5 writer.
+  state machine and lifecycle adapter around the same atomic HDF5 writer;
+  `EpisodeController(collection_identity=...)` writes the validated formal
+  collection identity into that manifest instead of creating a second schema.
 - `spd_vr/filter_contacts.py`, `spd_vr/visual.py`, `spd_vr/augment.py`: offline
   contact-gap filtering plus opt-in segmentation/color and calibrated mirror
   transforms.
@@ -167,6 +169,10 @@ collection artifact.
 official DINOv3 checkpoint, records its SHA-256, measures streaming KV append
 and ten-step cached action sampling on the requested device, and never falls
 back to an ABC or tiny checkpoint.
+
+Training checkpoints retain the rank-zero compatibility RNG record plus a
+per-rank Torch/NumPy/Python/CUDA snapshot. Resume selects the current rank and
+rejects a world-size or CPU/CUDA mismatch before stochastic training continues.
 
 The hardware, vendor-license, target-CUDA, 8-GPU-resume, formal data, and
 release gates that cannot be established by these local diagnostics are
