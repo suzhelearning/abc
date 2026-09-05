@@ -254,7 +254,9 @@ Do not count a CPU/tiny-DINO run as this gate.
 
 Required diagnostics before accepting the formal checkpoint:
 
-- tiny-data overfit has a documented decreasing flow loss and no NaN/Inf;
+- the local deterministic tiny optimization-step smoke passes (`uv run pytest
+  -q tests/test_spd_training.py`); the target environment must repeat the
+  tiny-data overfit with a documented decreasing flow loss and no NaN/Inf;
 - a long-run sample has stable loss, gradient norms, EMA and validation;
 - the resumed run is numerically continuous at the checkpoint boundary;
 - the final checkpoint has no embedded frozen DINO weights and its slim-state

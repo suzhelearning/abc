@@ -364,6 +364,11 @@ VRAM you may need to reduce `--batch-size`.
 The above training yields ~2.6-3 iterations / sec on H100/H200. It achieves a training
 loss of ~`0.048` after 75k steps.
 
+The regression suite also exercises the shared Muon/AdamW/EMA optimization
+step with a deterministic tiny SPD model (`tests/test_spd_training.py`). This
+is a CPU implementation smoke and overfit check only; it does not qualify the
+official DINO checkpoint, target GPU, 8-GPU resume, or 170k-step run.
+
 ## Evaluation
 
 You can either evaluate a checkpoint you trained yourself (drops into

@@ -8,7 +8,7 @@ import math
 import os
 from pathlib import Path
 import time
-from typing import Any
+from typing import Any, Mapping
 
 import h5py
 import numpy as np
@@ -138,6 +138,39 @@ def build_optimizers(
         weight_decay=config.optim.weight_decay,
     )
     return muon, adamw
+
+
+def optimization_step(
+    model: torch.nn.Module,
+    muon: torch.optim.Optimizer,
+    adamw: torch.optim.Optimizer,
+    ema: EMA,
+    batch: Mapping[str, Any],
+    *,
+    max_grad_norm: float,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Run one shared SPD optimization step and update EMA.
+
+    Keeping this small seam public lets a deterministic tiny overfit test use
+    the exact Muon/AdamW/EMA path used by the distributed loop.  It does not
+    change the production model, data schema, or checkpoint format.
+    """
+    if isinstance(max_grad_norm, bool) or not math.isfinite(float(max_grad_norm)) or max_grad_norm <= 0:
+        raise ValueError("max_grad_norm must be finite and positive")
+    model.train()
+    muon.zero_grad(set_to_none=True)
+    adamw.zero_grad(set_to_none=True)
+    loss = model(batch)
+    if loss.ndim != 0 or not torch.isfinite(loss):
+        raise ValueError("SPD training produced a non-finite scalar loss")
+    loss.backward()
+    grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), float(max_grad_norm))
+    if not torch.isfinite(grad_norm):
+        raise ValueError("SPD training produced a non-finite gradient norm")
+    muon.step()
+    adamw.step()
+    ema.update(_module(model))
+    return loss.detach(), torch.as_tensor(grad_norm).detach()
 
 
 def _to_device(value: Any, device: torch.device) -> Any:
@@ -358,16 +391,14 @@ def train(config: SPDTrainConfig) -> None:
             if step >= config.train_steps:
                 break
             batch = _to_device(batch, device)
-            muon.zero_grad(set_to_none=True)
-            adamw.zero_grad(set_to_none=True)
-            loss = model(batch)
-            loss.backward()
-            grad_norm = torch.nn.utils.clip_grad_norm_(
-                model.parameters(), config.optim.max_grad_norm
+            loss, grad_norm = optimization_step(
+                model,
+                muon,
+                adamw,
+                ema,
+                batch,
+                max_grad_norm=config.optim.max_grad_norm,
             )
-            muon.step()
-            adamw.step()
-            ema.update(_module(model))
             step += 1
 
             if step % config.log_every == 0:
@@ -438,6 +469,7 @@ __all__ = [
     "EMA",
     "build_optimizers",
     "compute_normalization",
+    "optimization_step",
     "split_muon_parameters",
     "train",
 ]
