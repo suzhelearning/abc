@@ -42,4 +42,3 @@ def test_safety_review_rejects_missing_mitigation_or_bad_date():
     bad_date["reviewed_at"] = "not-a-date"
     with pytest.raises(ValueError, match="ISO date"):
         validate_safety_review(bad_date)
-

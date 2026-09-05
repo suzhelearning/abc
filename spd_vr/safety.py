@@ -59,4 +59,3 @@ def validate_safety_review(document: Mapping[str, Any]) -> dict[str, Any]:
 
 
 __all__ = ["SAFETY_REVIEW_SCHEMA", "validate_safety_review"]
-
