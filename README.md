@@ -287,6 +287,19 @@ For the required source/license/terms/hash record and the target-GPU,
 8-GPU-resume, hardware fault-matrix, and 75-hour collection gates, follow the
 external validation runbook linked above.
 
+The final evidence bundle can be checked without publishing anything:
+
+```bash
+uv run spd-vr-release-audit /lab-runs/<run-id>/release.json \
+  --dino-checkpoint /lab-runs/<run-id>/dinov3_vitb16_pretrain_lvd1689m.pth \
+  --expected-commit "$(git rev-parse HEAD)"
+```
+
+This command is fail-closed and requires explicit vendor terms, compiled DINO
+benchmark evidence, 8-GPU resume evidence, the formal collection audit,
+evaluation/ablation results, and an approved safety review. It does not create
+or infer any of those records.
+
 Replay restores the recorded `mjSTATE_FULLPHYSICS` rows and checks qpos/qvel,
 state tolerance, optional hand-object contacts, and (with `--render`) camera
 availability against the same model hash:

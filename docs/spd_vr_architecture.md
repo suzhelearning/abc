@@ -177,7 +177,9 @@ rejects a world-size or CPU/CUDA mismatch before stochastic training continues.
 The hardware, vendor-license, target-CUDA, 8-GPU-resume, formal data, and
 release gates that cannot be established by these local diagnostics are
 defined in [`spd_vr_external_validation.md`](spd_vr_external_validation.md).
-Those gates remain fail-closed until their external evidence is archived.
+Those gates remain fail-closed until their external evidence is archived. Once
+the records exist, `spd-vr-release-audit` checks the versioned evidence bundle
+and the exact DINO checkpoint without publishing or authorizing actuation.
 
 `spd-replay-episode` restores each recorded full-physics state and checks the
 same model hash, qpos/qvel tolerance, optional hand-object contact bit, and

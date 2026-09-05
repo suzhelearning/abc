@@ -320,3 +320,24 @@ Any future Tianji/Wuji2 fine-tune is a separate safety review. This repository
 does not emit follower commands, motor bus packets, emergency-stop calls or
 collision-safe physical trajectories; a successful simulation acceptance JSON
 cannot authorize hardware actuation.
+
+### Aggregate release gate
+
+After the records above have been archived, put their paths in a versioned
+`release.json` manifest with `schema_version: 1`, a 40-character `git_commit`,
+and entries named `vendor_terms`, `dino_provenance`, `policy_benchmark`,
+`training_resume`, `collection_audit`, `evaluation`, and `safety_review`.
+The executable gate checks those records, validates the DINO provenance against
+the exact checkpoint, requires compiled p95/peak-memory evidence, requires the
+8-GPU/170k-step and 75-hour/all-task claims, and requires five planned
+ablations plus confidence intervals:
+
+```bash
+uv run spd-vr-release-audit /lab-runs/<run-id>/release.json \
+  --dino-checkpoint /lab-runs/<run-id>/dinov3_vitb16_pretrain_lvd1689m.pth \
+  --expected-commit "$(git rev-parse HEAD)" > release-audit.json
+```
+
+It returns non-zero for missing or contradictory evidence. A passing audit is
+still limited to the scope written in `safety_review`; it does not authorize
+physical actuation.
