@@ -166,6 +166,11 @@ episode IDs (75.25 qualified hours), but remains explicitly
 `data_collected: false`; only HDF5 episodes accepted by the collection audit
 can contribute to the formal target.
 
+`spd-vr-evaluation` converts reviewed binary rollout outcomes into a strict
+17-task report covering the full policy and the five planned ablations. It
+computes Wilson 95% intervals and binds the report to the dataset split, model
+config, DINO hash, commit and seed; it never generates outcomes itself.
+
 `spd-sim-benchmark` measures the MuJoCo/MJWarp control tick (480 Hz physics,
 60 Hz control) with optional camera rendering.  It is a timing diagnostic only;
 it does not publish HDF5 or turn an unqualified collision model into a data

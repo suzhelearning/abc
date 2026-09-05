@@ -1,8 +1,10 @@
 import hashlib
 import json
 
+from spd_vr.evaluation import PLANNED_ABLATIONS, build_evaluation_report
 from spd_vr.policy_benchmark import EXPECTED_DINO_MODEL_ID
 from spd_vr.release import audit_release
+from spd_vr.scenes.registry import TASK_REGISTRY
 
 
 def _write_json(path, value):
@@ -66,11 +68,23 @@ def _evidence(tmp_path):
     )
     _write_json(
         tmp_path / "evaluation.json",
-        {
-            "ok": True,
-            "ablations": ["visual", "history", "contact", "actual_qpos", "streaming"],
-            "confidence_intervals": {"task": [0.1, 0.2]},
-        },
+        build_evaluation_report(
+            {
+                "schema_version": "spd-vr-evaluation-input-v1",
+                "git_commit": "1" * 40,
+                "dataset_split_sha256": "b" * 64,
+                "model_config_sha256": "c" * 64,
+                "dino_checkpoint_sha256": hashlib.sha256(checkpoint.read_bytes()).hexdigest(),
+                "seed": 7,
+                "tasks": {
+                    task: {
+                        variant: [True, False, True]
+                        for variant in ("full", *PLANNED_ABLATIONS)
+                    }
+                    for task in TASK_REGISTRY
+                },
+            }
+        ),
     )
     _write_json(
         tmp_path / "safety.json",

@@ -331,6 +331,20 @@ contact filtering, actual-qpos labels and streaming-vs-batched inference),
 and report task-level success with confidence intervals rather than training
 loss alone.
 
+The repository provides a report builder for the reviewed binary outcomes:
+
+```bash
+uv run spd-vr-evaluation \
+  --input /lab-runs/<run-id>/evaluation-input.json \
+  --output /lab-runs/<run-id>/evaluation.json
+```
+
+The input must cover all 17 registered tasks, `full` plus each of the five
+planned ablations, and the exact dataset/model/DINO hashes. The output uses
+Wilson 95% intervals and is rejected if counts, intervals, metadata or task
+coverage are inconsistent. This tool does not run a policy or turn synthetic
+outcomes into release evidence.
+
 Any future Tianji/Wuji2 fine-tune is a separate safety review. This repository
 does not emit follower commands, motor bus packets, emergency-stop calls or
 collision-safe physical trajectories; a successful simulation acceptance JSON

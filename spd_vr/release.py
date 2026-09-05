@@ -17,6 +17,7 @@ from pathlib import Path
 import re
 from typing import Any, Mapping, Sequence
 
+from .evaluation import validate_evaluation_report
 from .policy_benchmark import validate_checkpoint_provenance
 
 
@@ -180,16 +181,25 @@ def _check_collection(document: Mapping[str, Any]) -> ReleaseCheck:
     return ReleaseCheck("collection_audit", True, f"{qualified:g} qualified hours and all registered tasks are present")
 
 
-def _check_evaluation(document: Mapping[str, Any]) -> ReleaseCheck:
-    if document.get("ok") is not True:
-        return ReleaseCheck("evaluation", False, "evaluation report did not pass")
-    ablations = document.get("ablations")
-    if not isinstance(ablations, (list, tuple, Mapping)) or len(ablations) < 5:
-        return ReleaseCheck("evaluation", False, "evaluation must cover at least five planned ablations")
-    intervals = document.get("confidence_intervals")
-    if not isinstance(intervals, Mapping) or not intervals:
-        return ReleaseCheck("evaluation", False, "task-level confidence_intervals are missing")
-    return ReleaseCheck("evaluation", True, f"{len(ablations)} ablations with confidence intervals are recorded")
+def _check_evaluation(
+    document: Mapping[str, Any],
+    *,
+    manifest_commit: str | None = None,
+    dino_sha256: str | None = None,
+) -> ReleaseCheck:
+    try:
+        report = validate_evaluation_report(document)
+    except Exception as exc:
+        return ReleaseCheck("evaluation", False, str(exc))
+    if manifest_commit is not None and report["git_commit"].lower() != manifest_commit.lower():
+        return ReleaseCheck("evaluation", False, "evaluation git_commit differs from release manifest")
+    if dino_sha256 is not None and report["dino_checkpoint_sha256"] != dino_sha256:
+        return ReleaseCheck("evaluation", False, "evaluation and DINO provenance hashes differ")
+    return ReleaseCheck(
+        "evaluation",
+        True,
+        f"{report['task_count']} tasks and {len(report['ablations'])} planned ablations have validated intervals",
+    )
 
 
 def _check_safety(document: Mapping[str, Any]) -> ReleaseCheck:
@@ -254,7 +264,13 @@ def audit_release(
     if "collection_audit" in evidence:
         checks.append(_check_collection(evidence["collection_audit"]))
     if "evaluation" in evidence:
-        checks.append(_check_evaluation(evidence["evaluation"]))
+        checks.append(
+            _check_evaluation(
+                evidence["evaluation"],
+                manifest_commit=manifest.get("git_commit") if isinstance(manifest.get("git_commit"), str) else None,
+                dino_sha256=provenance.get("sha256") if provenance is not None else None,
+            )
+        )
     if "safety_review" in evidence:
         checks.append(_check_safety(evidence["safety_review"]))
     return ReleaseAudit(bool(checks) and all(item.ok for item in checks), str(path), tuple(checks))

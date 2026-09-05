@@ -272,6 +272,24 @@ it is not a substitute for HDF5 episodes or the 75-hour collection audit. The
 command rejects a target larger than the reviewed Table-2 schedule instead of
 silently changing task quotas.
 
+After the reviewed split has real rollout outcomes, turn the full 17-task
+comparison into a release evidence report. The input JSON must contain one
+binary outcome list for `full` and each of the five planned ablations
+(`visual_input`, `history`, `contact_filtering`, `actual_qpos_labels`, and
+`streaming_inference`) per registered task, plus commit/config/split/DINO
+hashes and a seed:
+
+```bash
+uv run spd-vr-evaluation \
+  --input /lab-runs/<run-id>/evaluation-input.json \
+  --output /lab-runs/<run-id>/evaluation.json
+```
+
+The command computes Wilson 95% intervals and rejects missing tasks, variants,
+metadata, inconsistent counts, or tampered intervals. It never runs a policy
+or invents success outcomes; `evaluation.json` is still subject to the
+release gate's DINO-hash and commit consistency checks.
+
 For a simulation-only real-time diagnostic (no HDF5 publication), run:
 
 ```bash
