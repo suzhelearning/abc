@@ -191,7 +191,7 @@ Before opening the three-window process graph, an optional read-only preflight
 checks the PICO/RoboticsService ADB reverse entry, vendor SDK, Python
 dependencies, display, generated artifacts, Zenoh endpoint, and managed tmux
 session.  Add `--require-contact` (or use it automatically with recording) to
-also enforce the CoACD contact gate:
+also enforce the contact surface-quality gate:
 
 ```bash
 uv run spd-vr-preflight --manifest generated/spd_vr/model_manifest.yaml \

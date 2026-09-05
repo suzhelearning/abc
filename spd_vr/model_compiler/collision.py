@@ -1,4 +1,4 @@
-"""Deterministic, fail-closed CoACD collision compilation."""
+"""Deterministic, fail-closed collision compilation."""
 
 from __future__ import annotations
 
@@ -258,16 +258,16 @@ def _canonical_mesh_arrays(vertices: np.ndarray, faces: np.ndarray) -> tuple[np.
     vertices = np.asarray(vertices, dtype="<f8")
     raw_faces = np.asarray(faces)
     if vertices.ndim != 2 or vertices.shape[1] != 3:
-        raise CollisionError("CoACD piece vertices must have shape (N,3)")
+        raise CollisionError("collision piece vertices must have shape (N,3)")
     if raw_faces.ndim != 2 or raw_faces.shape[1] != 3 or not np.isfinite(raw_faces).all():
-        raise CollisionError("CoACD piece faces must be finite triangles")
+        raise CollisionError("collision piece faces must be finite triangles")
     faces = np.asarray(raw_faces, dtype=np.int64)
     if not np.array_equal(raw_faces, faces):
-        raise CollisionError("CoACD piece face indices must be integers")
+        raise CollisionError("collision piece face indices must be integers")
     if len(vertices) == 0 or len(faces) == 0 or not np.isfinite(vertices).all():
-        raise CollisionError("CoACD piece is empty or non-finite")
+        raise CollisionError("collision piece is empty or non-finite")
     if (faces < 0).any() or (faces >= len(vertices)).any():
-        raise CollisionError("CoACD piece has out-of-range face indices")
+        raise CollisionError("collision piece has out-of-range face indices")
     order = np.lexsort((vertices[:, 2], vertices[:, 1], vertices[:, 0]))
     remap = np.empty(len(order), dtype=np.int64)
     remap[order] = np.arange(len(order))
@@ -682,18 +682,18 @@ def decompose_mesh(
         try:
             vertices, faces = _canonical_mesh_arrays(piece[0], piece[1])
             if len(vertices) > settings.max_vertices:
-                raise CollisionError("CoACD piece exceeds max vertices")
+                raise CollisionError("collision piece exceeds max vertices")
             piece_mesh = trimesh.Trimesh(vertices=vertices, faces=faces, process=False)
             piece_mesh.fix_normals()
             volume = abs(float(piece_mesh.volume))
             if not np.isfinite(volume) or volume <= 0:
-                raise CollisionError("CoACD piece has non-positive volume")
+                raise CollisionError("collision piece has non-positive volume")
             data = _canonical_mesh_bytes((vertices, faces))
             canonical.append((_hash_bytes(data), data, vertices, faces, volume))
         except CollisionError:
             raise
         except Exception as exc:
-            raise CollisionError(f"invalid CoACD output: {exc}") from exc
+            raise CollisionError(f"invalid collision output: {exc}") from exc
     if len(canonical) > settings.published_max_pieces:
         raise CollisionError(
             f"{settings.method} output exceeds {settings.published_max_pieces} pieces"

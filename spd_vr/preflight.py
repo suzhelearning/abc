@@ -32,7 +32,7 @@ ARTIFACT_FILES = (
     "collision_manifest.yaml",
     "actuator_calibration.yaml",
 )
-DEPENDENCIES = ("mujoco", "osqp", "coacd", "zenoh")
+DEPENDENCIES = ("mujoco", "osqp", "coacd", "zenoh", "rtree")
 
 
 @dataclass(frozen=True, slots=True)
@@ -330,7 +330,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--serial", default=None)
     parser.add_argument("--expected-reverse", default=None)
     parser.add_argument("--session", default=SESSION_NAME)
-    parser.add_argument("--require-contact", action="store_true", help="also require the CoACD contact-quality gate")
+    parser.add_argument("--require-contact", action="store_true", help="also require the contact surface-quality gate")
     args = parser.parse_args(argv)
     results = run_checks(
         repo_root=args.repo_root,

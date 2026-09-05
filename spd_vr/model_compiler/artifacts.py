@@ -357,7 +357,7 @@ def _compile_collisions(
                     "sha256": output_digest,
                     # Every published piece must retain the hash of the
                     # authoritative source mesh it approximates.  ``digest``
-                    # identifies the canonical CoACD piece itself; using it
+                    # identifies the canonical collision piece itself; using it
                     # here would make the manifest impossible to verify
                     # against the source record after publication.
                     "source_sha256": expected_source,

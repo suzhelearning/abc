@@ -8,7 +8,7 @@ from spd_vr.model_compiler.collision import CollisionSettings, decompose_mesh, l
 
 def test_surface_patch_decomposition_publishes_quality_gated_convex_pieces(tmp_path):
     # Two offset boxes make a small concave/disconnected proxy case without
-    # depending on the vendor mesh or on a CoACD cache from another machine.
+    # depending on the vendor mesh or on a cache from another machine.
     source = trimesh.util.concatenate(
         [
             trimesh.creation.box(extents=(0.04, 0.02, 0.02)),

@@ -12,8 +12,8 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--urdf", type=Path, required=True, help="authoritative URDF")
     parser.add_argument("--output", type=Path, required=True, help="published generated artifact directory")
-    parser.add_argument("--cache", type=Path, help="CoACD cache directory")
-    parser.add_argument("--raw-collisions", action="store_true", help="reuse source meshes without CoACD")
+    parser.add_argument("--cache", type=Path, help="collision decomposition cache directory")
+    parser.add_argument("--raw-collisions", action="store_true", help="reuse source meshes without decomposition")
     parser.add_argument("--verify", action="store_true", help="verify an existing output instead of compiling")
     parser.add_argument(
         "--verify-contact",
