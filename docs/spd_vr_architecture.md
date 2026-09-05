@@ -154,7 +154,9 @@ acceptance separate from collection-level task/scene coverage, PICO source
 timestamp provenance, two-sided validity, raw/source/qualified duration and
 the planned 75-hour target. Formal mode requires the manifest collection
 identity (`run_id`, `operator_id`, `pico_serial`) and complete 258-row windows;
-it counts only contact-qualified duration.
+it requires scene/task seed plus model/URDF/contact-manifest hashes and counts
+only contact-qualified duration. Mixed artifact hashes fail the collection
+gate.
 
 `spd-sim-benchmark` measures the MuJoCo/MJWarp control tick (480 Hz physics,
 60 Hz control) with optional camera rendering.  It is a timing diagnostic only;

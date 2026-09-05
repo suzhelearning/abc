@@ -293,9 +293,10 @@ uv run spd-vr-dataset-audit /lab-runs/<dataset> \
 
 The report separates raw wall-clock duration, PICO source duration, and
 contact-qualified duration. Only the latter is used for the formal target;
-missing scene/task identity, source timestamps, collection identity, checksums
-or complete 258-row windows make an episode fail rather than silently counting
-its file size as data.
+missing scene/task/seed identity, source timestamps, collection identity,
+model/URDF/contact-manifest hashes, checksums or complete 258-row windows make
+an episode fail rather than silently counting its file size as data. A formal
+collection also rejects mixed artifact hashes.
 
 The 75-hour target is an experiment-plan quantity, not a property inferred
 from file size. Publish an aggregate only after the approved scene/task

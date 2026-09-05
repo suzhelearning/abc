@@ -411,6 +411,7 @@ def run(args: argparse.Namespace) -> int:
             "output_boundary": "MuJoCo simulation only",
             "model_sha256": _sha256(model_path),
             "urdf_sha256": _sha256(urdf_path),
+            "collision_manifest_sha256": _sha256(model_path.parent / "collision_manifest.yaml"),
             "retarget_config_sha256": {
                 "left": _sha256(args.left_hand_config.resolve()),
                 "right": _sha256(args.right_hand_config.resolve()),

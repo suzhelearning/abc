@@ -37,7 +37,12 @@ def _frame(index: int) -> RawFrame:
 
 
 def _write_episode(path, *, task="jenga/hollow_tower", metadata=True):
-    manifest = {"scene_manifest": {"task": task}}
+    manifest = {
+        "scene_manifest": {"task": task, "reset": {"seed": 7}},
+        "model_sha256": "a" * 64,
+        "urdf_sha256": "b" * 64,
+        "collision_manifest_sha256": "c" * 64,
+    }
     if metadata:
         manifest["collection"] = collection_metadata(
             run_id="run-001", operator_id="operator-01", pico_serial="pico-01"
@@ -70,6 +75,9 @@ def test_episode_audit_reports_qualified_duration_and_provenance(tmp_path):
     assert report.ok
     assert report.task == "jenga/hollow_tower"
     assert report.scene == "jenga"
+    assert report.seed == 7
+    assert report.model_sha256 == "a" * 64
+    assert report.collision_manifest_sha256 == "c" * 64
     assert report.raw_frames == 515
     assert report.training_frames == 258
     assert report.usable_training_windows == 1
@@ -86,6 +94,7 @@ def test_collection_audit_is_report_only_until_formal_flags_are_requested(tmp_pa
     assert report.scenes == ("jenga",)
     assert report.target_met is False
     assert report.missing_tasks == ()
+    assert report.artifact_hashes_consistent
 
     formal = audit_collection(
         tmp_path,

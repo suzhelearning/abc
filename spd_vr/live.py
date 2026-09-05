@@ -134,6 +134,7 @@ def run(args: argparse.Namespace) -> int:
             "model_sha256": _sha256(model_path),
             "arm_model_sha256": _sha256(arm_model_path),
             "urdf_sha256": _sha256(urdf_path),
+            "collision_manifest_sha256": _sha256(model_path.parent / "collision_manifest.yaml"),
             "retarget_config_sha256": {
                 "left": _sha256(left_hand_config),
                 "right": _sha256(right_hand_config),

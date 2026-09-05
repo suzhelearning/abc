@@ -14,6 +14,7 @@ import argparse
 from dataclasses import asdict, dataclass
 import json
 from pathlib import Path
+import re
 from typing import Any, Mapping, Sequence
 
 import h5py
@@ -25,6 +26,7 @@ from .scenes.registry import TASK_REGISTRY
 
 COLLECTION_METADATA_KEYS = ("run_id", "operator_id", "pico_serial")
 DEFAULT_TARGET_HOURS = 75.0
+_SHA256_RE = re.compile(r"^[0-9a-fA-F]{64}$")
 
 
 def collection_metadata(
@@ -108,6 +110,25 @@ def _metadata_errors(manifest: Mapping[str, Any]) -> list[str]:
     return errors
 
 
+def _scene_seed(manifest: Mapping[str, Any]) -> int | None:
+    scene_manifest = manifest.get("scene_manifest")
+    if isinstance(scene_manifest, Mapping):
+        reset = scene_manifest.get("reset")
+        if isinstance(reset, Mapping) and isinstance(reset.get("seed"), int) and not isinstance(
+            reset.get("seed"), bool
+        ):
+            return int(reset["seed"])
+    value = manifest.get("seed")
+    if isinstance(value, int) and not isinstance(value, bool):
+        return int(value)
+    return None
+
+
+def _artifact_hash(manifest: Mapping[str, Any], key: str) -> str | None:
+    value = manifest.get(key)
+    return value if isinstance(value, str) and _SHA256_RE.fullmatch(value) else None
+
+
 @dataclass(frozen=True, slots=True)
 class EpisodeAudit:
     """Machine-readable metrics and gate status for one episode."""
@@ -117,6 +138,10 @@ class EpisodeAudit:
     errors: tuple[str, ...] = ()
     task: str | None = None
     scene: str | None = None
+    seed: int | None = None
+    model_sha256: str | None = None
+    urdf_sha256: str | None = None
+    collision_manifest_sha256: str | None = None
     raw_frames: int = 0
     training_frames: int = 0
     raw_duration_s: float = 0.0
@@ -161,6 +186,17 @@ def audit_episode(
         errors.append(f"episode task is not in the SPD registry: {task}")
     if require_metadata:
         errors.extend(_metadata_errors(manifest))
+    seed = _scene_seed(manifest)
+    if require_metadata and seed is None:
+        errors.append("scene/task seed is missing from the episode manifest")
+    artifact_hashes = {
+        key: _artifact_hash(manifest, key)
+        for key in ("model_sha256", "urdf_sha256", "collision_manifest_sha256")
+    }
+    if require_metadata:
+        for key, value in artifact_hashes.items():
+            if value is None:
+                errors.append(f"manifest {key} is missing or not a SHA-256 hex string")
 
     try:
         with h5py.File(episode_path, "r") as handle:
@@ -202,6 +238,10 @@ def audit_episode(
         errors=tuple(errors),
         task=task,
         scene=task_scene,
+        seed=seed,
+        model_sha256=artifact_hashes["model_sha256"],
+        urdf_sha256=artifact_hashes["urdf_sha256"],
+        collision_manifest_sha256=artifact_hashes["collision_manifest_sha256"],
         raw_frames=int(timestamps.size),
         training_frames=int(index.size),
         raw_duration_s=_duration_ns(timestamps) / 1e9,
@@ -232,6 +272,7 @@ class CollectionAudit:
     target_met: bool
     required_all_tasks: bool
     require_target: bool
+    artifact_hashes_consistent: bool
 
     def as_dict(self) -> dict[str, Any]:
         result = asdict(self)
@@ -269,11 +310,21 @@ def audit_collection(
     raw_hours = sum(item.raw_duration_s for item in audits) / 3600.0
     qualified_hours = sum(item.qualified_duration_s for item in audits) / 3600.0
     source_hours = sum(item.source_duration_s for item in audits) / 3600.0
+    artifact_tuples = {
+        (item.model_sha256, item.urdf_sha256, item.collision_manifest_sha256)
+        for item in audits
+        if item.model_sha256 is not None
+        or item.urdf_sha256 is not None
+        or item.collision_manifest_sha256 is not None
+    }
+    artifact_hashes_consistent = len(artifact_tuples) <= 1
     target_met = qualified_hours >= float(target_hours)
     ok = bool(audits) and all(item.ok for item in audits)
     if require_all_tasks and missing_tasks:
         ok = False
     if require_target and not target_met:
+        ok = False
+    if require_metadata and (not artifact_tuples or not artifact_hashes_consistent):
         ok = False
     return CollectionAudit(
         ok=ok,
@@ -288,6 +339,7 @@ def audit_collection(
         target_met=target_met,
         required_all_tasks=require_all_tasks,
         require_target=require_target,
+        artifact_hashes_consistent=artifact_hashes_consistent,
     )
 
 
