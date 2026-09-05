@@ -68,4 +68,3 @@ def test_evaluation_cli_writes_report(tmp_path, capsys):
     report = json.loads(output.read_text(encoding="utf-8"))
     assert report["schema_version"] == EVALUATION_SCHEMA
     assert json.loads(capsys.readouterr().out)["ok"] is True
-
