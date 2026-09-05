@@ -226,7 +226,8 @@ Use a dataset directory whose episodes have passed the formal 258-row gate.
 Keep the exact command/config and checkpoint in the run record. First run a
 short distributed smoke, stop after a checkpoint, then resume into a new
 output directory and verify the step/epoch, DINO hash, normalization, model,
-EMA, Muon/AdamW and RNG state.
+EMA, Muon/AdamW and per-rank RNG state (including CUDA streams on the target
+host).
 
 ```bash
 uv run torchrun --standalone --nproc-per-node 8 train_spd.py \

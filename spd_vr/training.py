@@ -7,6 +7,7 @@ import json
 import math
 import os
 from pathlib import Path
+import random
 import time
 from typing import Any, Mapping
 
@@ -39,6 +40,63 @@ def _sha256(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def capture_rng_state() -> dict[str, Any]:
+    """Capture every process-local RNG used by the training loop.
+
+    Checkpoints are written by rank zero, so distributed callers gather one
+    copy of this mapping per rank before serializing it.  CUDA state is
+    optional for CPU-only smoke tests but is included whenever CUDA is
+    available; silently dropping it would make a resumed run diverge at the
+    first stochastic forward pass.
+    """
+
+    state: dict[str, Any] = {
+        "torch": torch.get_rng_state(),
+        "numpy": np.random.get_state(),
+        "python": random.getstate(),
+    }
+    if torch.cuda.is_available():
+        state["cuda"] = [value.clone() for value in torch.cuda.get_rng_state_all()]
+    return state
+
+
+def restore_rng_state(state: Mapping[str, Any]) -> None:
+    """Restore a state produced by :func:`capture_rng_state`.
+
+    Older checkpoints only contain ``torch`` and ``numpy``; those remain
+    accepted for backwards compatibility.  A checkpoint that contains CUDA
+    state cannot be resumed on a CPU-only process because doing so would make
+    the stochastic stream unverifiable, so that mismatch fails closed.
+    """
+
+    if not isinstance(state, Mapping):
+        raise ValueError("checkpoint RNG state must be a mapping")
+    torch_state = state.get("torch")
+    if torch_state is not None:
+        if not isinstance(torch_state, torch.Tensor):
+            raise ValueError("checkpoint torch RNG state must be a tensor")
+        torch.set_rng_state(torch_state)
+    numpy_state = state.get("numpy")
+    if numpy_state is not None:
+        if not isinstance(numpy_state, tuple) or len(numpy_state) != 5:
+            raise ValueError("checkpoint NumPy RNG state is malformed")
+        np.random.set_state(numpy_state)
+    python_state = state.get("python")
+    if python_state is not None:
+        if not isinstance(python_state, tuple) or len(python_state) != 3:
+            raise ValueError("checkpoint Python RNG state is malformed")
+        random.setstate(python_state)
+    cuda_state = state.get("cuda")
+    if cuda_state is not None:
+        if not torch.cuda.is_available():
+            raise RuntimeError("checkpoint contains CUDA RNG state but CUDA is unavailable")
+        if not isinstance(cuda_state, (list, tuple)) or not all(
+            isinstance(value, torch.Tensor) for value in cuda_state
+        ):
+            raise ValueError("checkpoint CUDA RNG state is malformed")
+        torch.cuda.set_rng_state_all(list(cuda_state))
 
 
 def compute_normalization(root: str | Path) -> dict[str, list[float]]:
@@ -342,14 +400,25 @@ def train(config: SPDTrainConfig) -> None:
             raise ValueError("resume checkpoint step must be non-negative")
         if epoch < 0:
             raise ValueError("resume checkpoint epoch must be non-negative")
-        rng = checkpoint.get("rng", {})
-        if isinstance(rng, dict):
-            torch_state = rng.get("torch")
-            if isinstance(torch_state, torch.Tensor):
-                torch.set_rng_state(torch_state)
-            numpy_state = rng.get("numpy")
-            if isinstance(numpy_state, tuple) and len(numpy_state) == 5:
-                np.random.set_state(numpy_state)
+        rng_by_rank = checkpoint.get("rng_by_rank")
+        if rng_by_rank is not None:
+            expected_world_size = int(checkpoint.get("rng_world_size", len(rng_by_rank)))
+            current_world_size = dist.get_world_size() if distributed else 1
+            if (
+                not isinstance(rng_by_rank, (list, tuple))
+                or expected_world_size != current_world_size
+                or len(rng_by_rank) != expected_world_size
+                or rank >= len(rng_by_rank)
+            ):
+                raise ValueError("resume checkpoint does not contain RNG state for this rank")
+            rng = rng_by_rank[rank]
+        else:
+            # Checkpoints written before per-rank capture remain loadable.
+            rng = checkpoint.get("rng")
+        if rng is not None:
+            if not isinstance(rng, Mapping):
+                raise ValueError("resume checkpoint RNG state is malformed")
+            restore_rng_state(rng)
         if rank == 0:
             print(f"resumed SPD checkpoint {config.resume} at step={step}")
         checkpoint_dino_sha256 = checkpoint.get("dino_checkpoint_sha256")
@@ -424,32 +493,44 @@ def train(config: SPDTrainConfig) -> None:
                     if wandb:
                         wandb.log({"val_flow_loss": value}, step=step)
 
-            if step % config.ckpt_every == 0 and rank == 0:
-                checkpoint = {
-                    "model": {
-                        name: value
-                        for name, value in _module(model).state_dict().items()
-                        if not name.startswith("img_backbone.")
-                    },
-                    "ema": ema.state_dict(),
-                    "muon": muon.state_dict(),
-                    "adamw": adamw.state_dict(),
-                    "normalization": normalization,
-                    "config": asdict(config),
-                    "step": step,
-                    "epoch": epoch,
-                    "dino_checkpoint": str(dino_path.resolve()),
-                    "dino_checkpoint_sha256": dino_sha256,
-                    "symmetry_spec_sha256": symmetry_spec_sha256,
-                    "rng": {
-                        "torch": torch.get_rng_state(),
-                        "numpy": np.random.get_state(),
-                    },
-                }
-                path = output / f"step_{step:07d}.pt"
-                torch.save(checkpoint, path)
-                torch.save(checkpoint, output / "last.pt")
-                print(f"saved {path}")
+            if step % config.ckpt_every == 0:
+                # Every rank contributes its own stochastic stream.  The
+                # all-gather is intentionally inside the checkpoint cadence,
+                # so normal training still has no collective overhead beyond
+                # the DDP gradient synchronizations.
+                rank_rng = capture_rng_state()
+                if distributed:
+                    gathered_rng: list[Any] = [None] * dist.get_world_size()
+                    dist.all_gather_object(gathered_rng, rank_rng)
+                else:
+                    gathered_rng = [rank_rng]
+                if rank == 0:
+                    checkpoint = {
+                        "model": {
+                            name: value
+                            for name, value in _module(model).state_dict().items()
+                            if not name.startswith("img_backbone.")
+                        },
+                        "ema": ema.state_dict(),
+                        "muon": muon.state_dict(),
+                        "adamw": adamw.state_dict(),
+                        "normalization": normalization,
+                        "config": asdict(config),
+                        "step": step,
+                        "epoch": epoch,
+                        "dino_checkpoint": str(dino_path.resolve()),
+                        "dino_checkpoint_sha256": dino_sha256,
+                        "symmetry_spec_sha256": symmetry_spec_sha256,
+                        # Keep the rank-zero key for old tooling, while the
+                        # per-rank list is what exact distributed resume uses.
+                        "rng": gathered_rng[0],
+                        "rng_by_rank": gathered_rng,
+                        "rng_world_size": len(gathered_rng),
+                    }
+                    path = output / f"step_{step:07d}.pt"
+                    torch.save(checkpoint, path)
+                    torch.save(checkpoint, output / "last.pt")
+                    print(f"saved {path}")
         epoch += 1
     if distributed:
         dist.destroy_process_group()
@@ -468,8 +549,10 @@ if __name__ == "__main__":
 __all__ = [
     "EMA",
     "build_optimizers",
+    "capture_rng_state",
     "compute_normalization",
     "optimization_step",
+    "restore_rng_state",
     "split_muon_parameters",
     "train",
 ]

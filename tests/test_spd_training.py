@@ -1,10 +1,17 @@
 import pytest
+import random
 
 torch = pytest.importorskip("torch")
 
 from spd_vr.config import SPDModelConfig, SPDTrainConfig
 from spd_vr.policy import SPDPolicy
-from spd_vr.training import EMA, build_optimizers, optimization_step
+from spd_vr.training import (
+    EMA,
+    build_optimizers,
+    capture_rng_state,
+    optimization_step,
+    restore_rng_state,
+)
 
 
 class TinyVision(torch.nn.Module):
@@ -89,3 +96,24 @@ def test_optimization_step_rejects_invalid_gradient_budget():
             _batch(),
             max_grad_norm=0,
         )
+
+
+def test_checkpoint_rng_state_round_trip_restores_all_cpu_streams():
+    random.seed(17)
+    torch.manual_seed(23)
+    np = pytest.importorskip("numpy")
+    np.random.seed(29)
+    state = capture_rng_state()
+    expected = (random.random(), float(np.random.rand()), torch.rand(4))
+
+    # Advance all three streams so a successful restore cannot be explained by
+    # the state still being at the capture point.
+    random.random()
+    np.random.rand()
+    torch.rand(4)
+    restore_rng_state(state)
+
+    assert random.random() == expected[0]
+    assert float(np.random.rand()) == expected[1]
+    assert torch.equal(torch.rand(4), expected[2])
+    assert "python" in state

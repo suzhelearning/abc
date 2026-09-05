@@ -164,7 +164,7 @@ uv run spd-filter-contacts \
   cache/spd/train/episode_0001.contact-filtered.hdf5
 uv run torchrun --standalone --nproc-per-node 8 train_spd.py \
   --dataset-root cache/spd
-# Resume a saved SPD run (model/EMA/optimizers/RNG and DINO hash are checked):
+# Resume a saved SPD run (model/EMA/optimizers/per-rank RNG and DINO hash are checked):
 uv run torchrun --standalone --nproc-per-node 8 train_spd.py \
   --dataset-root cache/spd --resume cache/spd_checkpoints/last.pt
 ```
