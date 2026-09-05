@@ -121,6 +121,22 @@ def _synchronize(torch: Any, device: Any) -> None:
         torch.cuda.synchronize(device)
 
 
+def _peak_memory_report(torch: Any, device: Any) -> dict[str, int | None | str]:
+    """Return peak allocator usage for the measured steady-state window."""
+
+    if getattr(device, "type", None) != "cuda":
+        return {
+            "device_type": str(getattr(device, "type", "unknown")),
+            "peak_allocated_bytes": None,
+            "peak_reserved_bytes": None,
+        }
+    return {
+        "device_type": "cuda",
+        "peak_allocated_bytes": int(torch.cuda.max_memory_allocated(device)),
+        "peak_reserved_bytes": int(torch.cuda.max_memory_reserved(device)),
+    }
+
+
 def benchmark_policy(
     dino_checkpoint: str | Path,
     *,
@@ -188,6 +204,10 @@ def benchmark_policy(
             if step % IMAGE_STRIDE == 0:
                 sample_actions_cached(cache, num_steps=euler_steps)
         _synchronize(torch, target)
+        # Exclude one-time torch.compile and graph/cache warm-up allocations;
+        # the report describes the steady-state window used for the deadline.
+        if target.type == "cuda":
+            torch.cuda.reset_peak_memory_stats(target)
         append_ms: list[float] = []
         chunk_ms: list[float] = []
         for _ in range(measure_ticks):
@@ -218,11 +238,13 @@ def benchmark_policy(
 
     append_stats = stats(append_ms)
     chunk_stats = stats(chunk_ms)
+    memory_stats = _peak_memory_report(torch, target)
     budget = 1000.0 / 30.0
     return {
         "device": str(target),
         "batch_size": batch_size,
         "compile": bool(compile_model),
+        "dino_bfloat16_autocast": bool(target.type == "cuda"),
         "euler_steps": euler_steps,
         "dino_checkpoint": str(checkpoint),
         "dino_checkpoint_sha256": _sha256(checkpoint),
@@ -232,6 +254,7 @@ def benchmark_policy(
         "parameters": parameter_report,
         "append_observation": append_stats,
         "sample_actions_cached": chunk_stats,
+        "peak_memory": memory_stats,
         "control_budget_ms": budget,
         "chunk_deadline_p95_ok": bool(chunk_stats["count"] and float(chunk_stats["p95_ms"]) <= budget),
         "qualification": "diagnostic; pass --enforce-deadline only after target-GPU review",

@@ -167,8 +167,8 @@ collection artifact.
 
 `spd-policy-benchmark` is the P4 full-model diagnostic. It requires a supplied
 official DINOv3 checkpoint, records its SHA-256, measures streaming KV append
-and ten-step cached action sampling on the requested device, and never falls
-back to an ABC or tiny checkpoint.
+and ten-step cached action sampling plus steady-state peak memory on the
+requested device, and never falls back to an ABC or tiny checkpoint.
 
 Training checkpoints retain the rank-zero compatibility RNG record plus a
 per-rank Torch/NumPy/Python/CUDA snapshot. Resume selects the current rank and

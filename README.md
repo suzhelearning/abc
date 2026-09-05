@@ -267,8 +267,9 @@ It reports p50/p95/p99 control-tick latency against the 60 Hz budget and
 explicitly does not waive the collision, hardware, or policy gates.
 
 Once the licensed official DINOv3 checkpoint and target GPU are available, the
-full streaming policy benchmark records the checkpoint hash and cached-action
-latency. It does not download weights or fall back to ABC/tiny checkpoints:
+full streaming policy benchmark records the checkpoint hash, cached-action
+latency, and steady-state CUDA peak memory. It does not download weights or
+fall back to ABC/tiny checkpoints:
 
 ```bash
 uv run spd-policy-benchmark \

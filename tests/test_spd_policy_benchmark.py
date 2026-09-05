@@ -83,3 +83,14 @@ def test_policy_benchmark_requires_provenance_for_formal_deadline(tmp_path, caps
         "error": "--enforce-deadline requires --checkpoint-provenance",
         "ok": False,
     }
+
+
+def test_peak_memory_report_is_explicit_on_cpu():
+    import torch
+
+    report = policy_benchmark._peak_memory_report(torch, torch.device("cpu"))
+    assert report == {
+        "device_type": "cpu",
+        "peak_allocated_bytes": None,
+        "peak_reserved_bytes": None,
+    }
