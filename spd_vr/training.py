@@ -340,6 +340,7 @@ def train(config: SPDTrainConfig) -> None:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     torch.manual_seed(config.seed + rank)
     np.random.seed(config.seed + rank)
+    random.seed(config.seed + rank)
 
     train_dataset = SPDSequenceDataset(
         train_root,
