@@ -21,6 +21,7 @@ from typing import Any
 import numpy as np
 
 from .config import TeleopConfig
+from .collection import collection_metadata
 from .data import EpisodeWriter
 from .robot import RobotSpec
 from .scenes.manifest import load_scene_manifest
@@ -396,29 +397,39 @@ def run(args: argparse.Namespace) -> int:
     robot = RobotSpec.from_urdf(urdf_path)
     retargeter = WujiRetargetAdapter(str(args.left_hand_config), str(args.right_hand_config))
     config = TeleopConfig(urdf_path=str(urdf_path))
+    identity = collection_metadata(
+        run_id=args.collection_run_id,
+        operator_id=args.operator_id,
+        pico_serial=args.pico_serial,
+    )
+    if identity and args.record_to is None:
+        raise ValueError("collection metadata requires --record-to")
     writer = None
     if args.record_to is not None:
+        manifest = {
+            "system": "PICO 4 Ultra + Tianji dual arms + Wuji2 dual hands",
+            "output_boundary": "MuJoCo simulation only",
+            "model_sha256": _sha256(model_path),
+            "urdf_sha256": _sha256(urdf_path),
+            "retarget_config_sha256": {
+                "left": _sha256(args.left_hand_config.resolve()),
+                "right": _sha256(args.right_hand_config.resolve()),
+            },
+            "source_sha256": _source_hashes(root),
+            "runtime": {
+                "backend": args.backend,
+                "endpoint": args.endpoint,
+                "object_bodies": list(args.object_body),
+                "process_graph": "pxrea_bridge -> arm_ik + viewer",
+            },
+            "canonical_joint_order": list(robot.joint_names),
+            "scene_manifest": scene_manifest,
+        }
+        if identity:
+            manifest["collection"] = identity
         writer = EpisodeWriter(
             args.record_to,
-            {
-                "system": "PICO 4 Ultra + Tianji dual arms + Wuji2 dual hands",
-                "output_boundary": "MuJoCo simulation only",
-                "model_sha256": _sha256(model_path),
-                "urdf_sha256": _sha256(urdf_path),
-                "retarget_config_sha256": {
-                    "left": _sha256(args.left_hand_config.resolve()),
-                    "right": _sha256(args.right_hand_config.resolve()),
-                },
-                "source_sha256": _source_hashes(root),
-                "runtime": {
-                    "backend": args.backend,
-                    "endpoint": args.endpoint,
-                    "object_bodies": list(args.object_body),
-                    "process_graph": "pxrea_bridge -> arm_ik + viewer",
-                },
-                "canonical_joint_order": list(robot.joint_names),
-                "scene_manifest": scene_manifest,
-            },
+            manifest,
             overwrite=args.overwrite,
             require_usable_training=args.require_usable_training,
         )
@@ -526,6 +537,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--scene-manifest", type=Path)
     parser.add_argument("--record-to", type=Path)
     parser.add_argument("--overwrite", action="store_true")
+    parser.add_argument("--collection-run-id", help="formal collection run identifier")
+    parser.add_argument("--operator-id", help="formal collection operator identifier")
+    parser.add_argument("--pico-serial", help="PICO device serial for the collection ledger")
     parser.add_argument(
         "--require-usable-training",
         action="store_true",

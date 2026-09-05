@@ -52,6 +52,7 @@ spd-control = "spd_vr.control_cli:main"
 spd-vr-live = "spd_vr.live:main"
 spd-vr-preflight = "spd_vr.preflight:main"
 spd-vr-acceptance = "spd_vr.acceptance:main"
+spd-vr-dataset-audit = "spd_vr.collection:main"
 spd-sim-benchmark = "spd_vr.simulation:benchmark_main"
 spd-policy-benchmark = "spd_vr.policy_benchmark:main"
 

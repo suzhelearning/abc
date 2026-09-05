@@ -299,6 +299,12 @@ def test_three_window_launcher_fake_source_shutdown_option_is_wired():
             "--require-usable-training",
             "--record-to",
             "/tmp/spd-episode.hdf5",
+            "--collection-run-id",
+            "run-001",
+            "--operator-id",
+            "operator-01",
+            "--pico-serial",
+            "pico-01",
             "--model",
             "/tmp/unified.xml",
             "--arm-model",
@@ -315,6 +321,9 @@ def test_three_window_launcher_fake_source_shutdown_option_is_wired():
     assert "--fake-source-jsonl /tmp/spd-events.jsonl" in result.stdout
     assert "--wait-for-shutdown" in result.stdout
     assert "--require-usable-training" in result.stdout
+    assert "--collection-run-id run-001" in result.stdout
+    assert "--operator-id operator-01" in result.stdout
+    assert "--pico-serial pico-01" in result.stdout
 
     rejected = subprocess.run(
         [str(script), "--dry-run", "--wait-for-shutdown"],
@@ -342,3 +351,30 @@ def test_three_window_launcher_fake_source_shutdown_option_is_wired():
     )
     assert missing_record.returncode == 2
     assert "requires --record-to" in missing_record.stderr
+
+    partial_collection = subprocess.run(
+        [str(script), "--dry-run", "--collection-run-id", "run-001"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert partial_collection.returncode == 2
+    assert "must be supplied together" in partial_collection.stderr
+
+    collection_without_record = subprocess.run(
+        [
+            str(script),
+            "--dry-run",
+            "--collection-run-id",
+            "run-001",
+            "--operator-id",
+            "operator-01",
+            "--pico-serial",
+            "pico-01",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert collection_without_record.returncode == 2
+    assert "requires --record-to" in collection_without_record.stderr

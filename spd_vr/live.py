@@ -13,6 +13,7 @@ import time
 import numpy as np
 
 from .config import TeleopConfig
+from .collection import collection_metadata
 from .data import EpisodeWriter
 from .ik import MuJoCoArmIK
 from .robot import RobotSpec
@@ -114,34 +115,44 @@ def run(args: argparse.Namespace) -> int:
     mapper = TeleopMapper(robot, arm_ik, retarget, teleop_config)
     mailbox = LatestSample()
     stream_gate = TrackingStreamGate()
+    identity = collection_metadata(
+        run_id=args.collection_run_id,
+        operator_id=args.operator_id,
+        pico_serial=args.pico_serial,
+    )
+    if identity and args.record_to is None:
+        raise ValueError("collection metadata requires --record-to")
     stop = threading.Event()
     for signum in (signal.SIGINT, signal.SIGTERM):
         signal.signal(signum, lambda *_: stop.set())
 
     writer = None
     if args.record_to is not None:
+        manifest = {
+            "system": "PICO 4 Ultra + Tianji dual arms + Wuji2 dual hands",
+            "output_boundary": "MuJoCo simulation only",
+            "model_sha256": _sha256(model_path),
+            "arm_model_sha256": _sha256(arm_model_path),
+            "urdf_sha256": _sha256(urdf_path),
+            "retarget_config_sha256": {
+                "left": _sha256(left_hand_config),
+                "right": _sha256(right_hand_config),
+            },
+            "source_sha256": _source_hashes(root),
+            "teleop_config": asdict(teleop_config),
+            "runtime": {
+                "backend": args.backend,
+                "endpoint": args.endpoint,
+                "object_bodies": list(args.object_body),
+            },
+            "canonical_joint_order": list(robot.joint_names),
+            "scene_manifest": scene_manifest,
+        }
+        if identity:
+            manifest["collection"] = identity
         writer = EpisodeWriter(
             args.record_to,
-            {
-                "system": "PICO 4 Ultra + Tianji dual arms + Wuji2 dual hands",
-                "output_boundary": "MuJoCo simulation only",
-                "model_sha256": _sha256(model_path),
-                "arm_model_sha256": _sha256(arm_model_path),
-                "urdf_sha256": _sha256(urdf_path),
-                "retarget_config_sha256": {
-                    "left": _sha256(left_hand_config),
-                    "right": _sha256(right_hand_config),
-                },
-                "source_sha256": _source_hashes(root),
-                "teleop_config": asdict(teleop_config),
-                "runtime": {
-                    "backend": args.backend,
-                    "endpoint": args.endpoint,
-                    "object_bodies": list(args.object_body),
-                },
-                "canonical_joint_order": list(robot.joint_names),
-                "scene_manifest": scene_manifest,
-            },
+            manifest,
             overwrite=args.overwrite,
             require_usable_training=args.require_usable_training,
         )
@@ -260,6 +271,9 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--record-to", type=Path)
     parser.add_argument("--overwrite", action="store_true")
+    parser.add_argument("--collection-run-id", help="formal collection run identifier")
+    parser.add_argument("--operator-id", help="formal collection operator identifier")
+    parser.add_argument("--pico-serial", help="PICO device serial for the collection ledger")
     parser.add_argument(
         "--require-usable-training",
         action="store_true",

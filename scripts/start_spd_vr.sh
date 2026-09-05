@@ -17,6 +17,9 @@ fake_source=""
 wait_for_shutdown=0
 record_to=""
 require_usable_training=0
+collection_run_id=""
+operator_id=""
+pico_serial=""
 scene_manifest=""
 router_timeout=300
 mode="detach"
@@ -46,6 +49,9 @@ Start options:
   --scene-manifest PATH    deterministic SPD scene JSON
   --record-to PATH         atomic HDF5 episode output
   --require-usable-training fail closed if the episode has no complete SPD training window
+  --collection-run-id ID   formal collection run identifier (requires the next two fields)
+  --operator-id ID         formal collection operator identifier
+  --pico-serial ID         PICO serial for the collection ledger
   --router-timeout SEC     wait for the viewer Zenoh router before clients (default 300)
   --preflight              run read-only PICO, dependency, artifact, and port checks before tmux
 EOF
@@ -76,6 +82,9 @@ while (($#)); do
     --scene-manifest) need_value "$@"; scene_manifest="$2"; shift 2 ;;
     --record-to) need_value "$@"; record_to="$2"; shift 2 ;;
     --require-usable-training) require_usable_training=1; shift ;;
+    --collection-run-id) need_value "$@"; collection_run_id="$2"; shift 2 ;;
+    --operator-id) need_value "$@"; operator_id="$2"; shift 2 ;;
+    --pico-serial) need_value "$@"; pico_serial="$2"; shift 2 ;;
     --router-timeout) need_value "$@"; router_timeout="$2"; shift 2 ;;
     --preflight) run_preflight=1; shift ;;
     --help|-h) usage; exit 0 ;;
@@ -85,6 +94,19 @@ done
 
 if ! [[ "$router_timeout" =~ ^[0-9]+$ ]] || ((router_timeout <= 0)); then
   echo "--router-timeout must be a positive integer" >&2
+  exit 2
+fi
+
+collection_fields=0
+[[ -n "$collection_run_id" ]] && ((collection_fields += 1))
+[[ -n "$operator_id" ]] && ((collection_fields += 1))
+[[ -n "$pico_serial" ]] && ((collection_fields += 1))
+if ((collection_fields != 0 && collection_fields != 3)); then
+  echo "--collection-run-id, --operator-id, and --pico-serial must be supplied together" >&2
+  exit 2
+fi
+if ((collection_fields == 3)) && [[ -z "$record_to" ]]; then
+  echo "collection metadata requires --record-to" >&2
   exit 2
 fi
 
@@ -146,6 +168,9 @@ if ((require_usable_training)); then
     exit 2
   fi
   viewer_command+=(--require-usable-training)
+fi
+if ((collection_fields == 3)); then
+  viewer_command+=(--collection-run-id "$collection_run_id" --operator-id "$operator_id" --pico-serial "$pico_serial")
 fi
 viewer_line="$(printf '%q ' "${viewer_command[@]}")"
 arm_line="$(printf '%q ' "${arm_command[@]}")"

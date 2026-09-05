@@ -234,6 +234,25 @@ contact-eligible 258-row SPD training window returns non-zero.  Synthetic idle
 smoke can omit `--require-usable-training`; it must not be reported as formal
 demonstration data.
 
+For an aggregate collection ledger, use `spd-vr-dataset-audit`. It reports raw
+duration, PICO source duration, contact-qualified duration, task/scene
+coverage, two-sided validity and complete 258-row windows. Formal collection
+adds identity/source metadata and explicitly enables the 75-hour/all-task
+gate:
+
+```bash
+uv run spd-vr-dataset-audit cache/spd/train \
+  --require-metadata --require-usable-training
+uv run spd-vr-dataset-audit cache/spd/train \
+  --target-hours 75 --require-target --require-all-tasks \
+  --require-metadata --require-usable-training
+```
+
+The live and three-window viewer accept `--collection-run-id`,
+`--operator-id`, and `--pico-serial` and persist them in the episode manifest;
+all three are required together for a formal identity record. The aggregate
+gate counts only contact-qualified duration, never idle file length.
+
 For a simulation-only real-time diagnostic (no HDF5 publication), run:
 
 ```bash

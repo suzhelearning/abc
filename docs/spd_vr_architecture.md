@@ -149,6 +149,13 @@ inventing a pass.  Formal data acceptance should add
 idle episode with no complete contact-eligible 258-row SPD window; synthetic idle smoke may
 omit that opt-in gate but is never equivalent to a demonstration dataset.
 
+`spd-vr-dataset-audit` is the aggregate collection gate. It keeps per-episode
+acceptance separate from collection-level task/scene coverage, PICO source
+timestamp provenance, two-sided validity, raw/source/qualified duration and
+the planned 75-hour target. Formal mode requires the manifest collection
+identity (`run_id`, `operator_id`, `pico_serial`) and complete 258-row windows;
+it counts only contact-qualified duration.
+
 `spd-sim-benchmark` measures the MuJoCo/MJWarp control tick (480 Hz physics,
 60 Hz control) with optional camera rendering.  It is a timing diagnostic only;
 it does not publish HDF5 or turn an unqualified collision model into a data

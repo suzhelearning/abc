@@ -139,6 +139,9 @@ scripts/start_spd_vr.sh --detach --preflight \
   --arm-model generated/spd_vr/arm_ik.xml \
   --urdf assets/tianji_wuji2/tianji_wuji2.urdf \
   --record-to /lab-runs/<run-id>/episode.hdf5 \
+  --collection-run-id <run-id> \
+  --operator-id <operator-id> \
+  --pico-serial <pico-device-id> \
   --require-usable-training
 
 scripts/start_spd_vr.sh --status
@@ -172,7 +175,7 @@ uv run spd-vr-acceptance \
   --require-contact --require-usable-training --replay
 ```
 
-The fake-source mode and the repository's 86-test regression suite cover the
+The fake-source mode and the repository's local regression suite cover the
 wire/process graph only; they do not close this hardware matrix.
 
 ## 4. Official DINO and target-GPU gate
@@ -273,6 +276,26 @@ uv run spd-vr-acceptance \
   --episodes /lab-runs/<dataset>/episode_<id>.hdf5 \
   --require-contact --require-usable-training --replay
 ```
+
+After the per-episode checks, aggregate the same directory with the collection
+auditor. The first command is a report; the second is the formal 75-hour,
+all-task gate and is expected to fail until the collection is actually
+complete.
+
+```bash
+uv run spd-vr-dataset-audit /lab-runs/<dataset> \
+  --require-metadata --require-usable-training
+
+uv run spd-vr-dataset-audit /lab-runs/<dataset> \
+  --target-hours 75 --require-target --require-all-tasks \
+  --require-metadata --require-usable-training
+```
+
+The report separates raw wall-clock duration, PICO source duration, and
+contact-qualified duration. Only the latter is used for the formal target;
+missing scene/task identity, source timestamps, collection identity, checksums
+or complete 258-row windows make an episode fail rather than silently counting
+its file size as data.
 
 The 75-hour target is an experiment-plan quantity, not a property inferred
 from file size. Publish an aggregate only after the approved scene/task
