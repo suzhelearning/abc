@@ -137,6 +137,7 @@ scripts/start_spd_vr.sh --detach --preflight \
   --sdk-library /path/to/libPXREARobotSDK.so \
   --model generated/spd_vr/unified_plant.xml \
   --arm-model generated/spd_vr/arm_ik.xml \
+  --urdf assets/tianji_wuji2/tianji_wuji2.urdf \
   --record-to /lab-runs/<run-id>/episode.hdf5 \
   --require-usable-training
 
@@ -205,6 +206,16 @@ repeated with `--enforce-deadline`; the command's deadline is the 30 Hz
 `--enforce-deadline` also requires `--checkpoint-provenance`; the command
 checks that the JSON model ID, source URL, license, accepted terms, access
 date, filename and SHA-256 match the actual checkpoint.
+
+After the review, the formal machine-readable deadline result is:
+
+```bash
+uv run spd-policy-benchmark \
+  --dino-checkpoint /lab-runs/<run-id>/dinov3_vitb16_pretrain_lvd1689m.pth \
+  --checkpoint-provenance /lab-runs/<run-id>/dinov3-provenance.json \
+  --device cuda:0 --warmup-ticks 32 --measure-ticks 256 --compile \
+  --enforce-deadline > policy-qualified.json
+```
 
 ## 5. 8-GPU smoke, resume, and formal training
 
