@@ -160,6 +160,12 @@ it requires scene/task seed plus model/URDF/contact-manifest hashes and counts
 only contact-qualified duration. Mixed artifact hashes fail the collection
 gate.
 
+`spd-vr-collection-plan` is the pre-recording schedule artifact. It expands
+the same registry into all 17 Table-2 task quotas and 1,916 deterministic
+episode IDs (75.25 qualified hours), but remains explicitly
+`data_collected: false`; only HDF5 episodes accepted by the collection audit
+can contribute to the formal target.
+
 `spd-sim-benchmark` measures the MuJoCo/MJWarp control tick (480 Hz physics,
 60 Hz control) with optional camera rendering.  It is a timing diagnostic only;
 it does not publish HDF5 or turn an unqualified collision model into a data

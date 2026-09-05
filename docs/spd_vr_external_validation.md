@@ -307,6 +307,21 @@ coverage, contact/258-row yield, source-time audit and human review are all
 complete. Keep raw 60 Hz streams; filtering may only update training metadata
 and must preserve the audit copy.
 
+Before recording, generate and review the deterministic schedule artifact:
+
+```bash
+uv run spd-vr-collection-plan \
+  --output /lab-runs/<run-id>/collection-plan.json \
+  --seed-start 1000 \
+  --run-id <run-id> --operator-id <operator-id> --pico-serial <pico-device-id>
+```
+
+The plan is derived from the checked-in six-scene/17-task registry and the
+paper's Table-2 quotas: 1,916 planned episodes and 75.25 qualified hours. It
+is marked `status: planned` and `data_collected: false`; it cannot satisfy the
+collection audit by itself. A target beyond the reviewed schedule is rejected
+until a new schedule is explicitly reviewed.
+
 ## 7. Evaluation, ablation and future hardware review
 
 Before releasing a checkpoint, archive the exact dataset split, normalization,

@@ -256,6 +256,22 @@ uses the reusable `EpisodeController`/`EpisodeRecorder` path can pass the same
 three fields as `collection_identity`; the state machine validates and writes
 the identical `manifest["collection"]` record.
 
+Approve a deterministic collection schedule before starting a formal run. It
+expands the registry's SPD Table-2 quotas into all 17 tasks and 1,916 planned
+episode IDs (75.25 qualified hours), with one reproducible seed per episode:
+
+```bash
+uv run spd-vr-collection-plan \
+  --output /lab-runs/<run-id>/collection-plan.json \
+  --seed-start 1000 \
+  --run-id <run-id> --operator-id <operator-id> --pico-serial <pico-device-id>
+```
+
+The artifact is explicitly marked `status: planned` and `data_collected: false`;
+it is not a substitute for HDF5 episodes or the 75-hour collection audit. The
+command rejects a target larger than the reviewed Table-2 schedule instead of
+silently changing task quotas.
+
 For a simulation-only real-time diagnostic (no HDF5 publication), run:
 
 ```bash
