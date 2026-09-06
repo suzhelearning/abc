@@ -144,7 +144,16 @@ for simulation/CI only and does not represent PICO hardware availability.
 The optional `spd-control pause|resume|realign|reset|shutdown` command sends
 the 40-byte versioned control frame to all three processes. Pause freezes the
 viewer physics and recorder; reset/epoch changes require a fresh neutral
-alignment before arm targets become valid.
+alignment before arm targets become valid. For a three-button foot pedal, keep
+one terminal open with:
+
+```bash
+uv run spd-control --pedal
+```
+
+The left (`R`) pedal realigns, the middle (`S`) pedal toggles pause/resume, and
+the right (`D`) pedal sends shutdown so the viewer can publish the HDF5 episode.
+`q`, Escape, or Ctrl-C exits the controller without shutting down the episode.
 
 Each HDF5 episode contains the full raw 60 Hz stream: actual 54-D qpos/qvel
 and `raw/action/qpos`, the 54-D teleoperation target, three 224×168 RGB and instance-segmentation

@@ -168,7 +168,10 @@ scripts/start_spd_vr.sh --detach --preflight \
   --require-usable-training
 
 scripts/start_spd_vr.sh --status
-# send pause/resume/realign/reset/shutdown with spd-control as required
+# In a dedicated terminal, use the three-button pedal controller:
+uv run spd-control --pedal
+# R = realign, S = pause/resume, D = shutdown and publish the HDF5 episode.
+# q/Esc/Ctrl-C exits the controller without shutdown.
 scripts/stop_spd_vr.sh
 ```
 
