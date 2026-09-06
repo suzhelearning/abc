@@ -98,7 +98,7 @@ uv run spd-model \
   --output generated/spd_vr \
   --cache cache/spd_collision
 
-uv run spd-model --verify --verify-contact \
+uv run spd-model --verify --verify-contact --write-receipt \
   --urdf assets/tianji_wuji2/tianji_wuji2.urdf \
   --output generated/spd_vr
 
@@ -112,6 +112,13 @@ The acceptance command is read-only. A raw convex-hull manifest, a missing
 record, an asset hash mismatch, or a model outside the manifest is a failure.
 `--raw-collisions` remains a display/control smoke mode and must not be used
 for contact-qualified recording.
+
+The first command after compilation is intentionally expensive: it loads and
+fully hashes the model/proxies, then publishes a qualification receipt only
+after both verifiers pass. Daily preflight and recording validate that receipt
+in seconds. Rerun it whenever the URDF, either manifest, either model XML, or a
+collision proxy changes. Formal `spd-vr-acceptance` remains a full independent
+verification and does not trust the cache.
 
 ## 3. PICO 4 Ultra hardware matrix
 

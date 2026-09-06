@@ -6,6 +6,7 @@ import argparse
 from pathlib import Path
 
 from .artifacts import compile_models, verify_artifacts, verify_contact_qualified
+from .qualification import write_contact_qualification_receipt
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -20,14 +21,26 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="require every collision record to pass the contact surface gate",
     )
+    parser.add_argument(
+        "--write-receipt",
+        action="store_true",
+        help="after full contact verification, publish a fast-start qualification receipt",
+    )
     args = parser.parse_args(argv)
     if args.verify_contact and not args.verify:
         parser.error("--verify-contact requires --verify")
+    if args.write_receipt and not (args.verify and args.verify_contact):
+        parser.error("--write-receipt requires --verify --verify-contact")
     if args.verify:
-        verified = verify_artifacts(args.output / "model_manifest.yaml", args.urdf)
-        if args.verify_contact:
-            verify_contact_qualified(verified.output_dir / "collision_manifest.yaml", urdf_path=args.urdf)
-        print(f"verified {verified.full_model} and {verified.arm_model}")
+        if args.write_receipt:
+            receipt = write_contact_qualification_receipt(args.output, args.urdf)
+            print(f"wrote {receipt}")
+            print(f"verified {args.output / 'unified_plant.xml'} and {args.output / 'arm_ik.xml'}")
+        else:
+            verified = verify_artifacts(args.output / "model_manifest.yaml", args.urdf)
+            if args.verify_contact:
+                verify_contact_qualified(verified.output_dir / "collision_manifest.yaml", urdf_path=args.urdf)
+            print(f"verified {verified.full_model} and {verified.arm_model}")
     else:
         manifest = compile_models(args.urdf, args.output, args.cache, raw_collisions=args.raw_collisions)
         print(f"generated {manifest.output_dir / 'unified_plant.xml'}")

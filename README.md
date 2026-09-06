@@ -106,11 +106,19 @@ uv run spd-model \
   --urdf assets/tianji_wuji2/tianji_wuji2.urdf \
   --output /tmp/spd_vr_raw --raw-collisions
 
-# Contact-data gate (raw builds fail here by design):
-uv run spd-model --verify --verify-contact \
+# One-time contact qualification (raw builds fail here by design):
+uv run spd-model --verify --verify-contact --write-receipt \
   --urdf assets/tianji_wuji2/tianji_wuji2.urdf \
   --output generated/spd_vr
 ```
+
+The one-time command performs the complete artifact/contact verification and
+writes `generated/spd_vr/contact_qualification.json`. It can take about a
+minute and may print QHull warnings while MuJoCo loads the model. Normal
+recording startup does not repeat that work: it hashes the URDF, manifests and
+model XML files, then checks the size and nanosecond mtime of every qualified
+collision proxy. Change any qualified file, rebuild the model, or move to a
+different URDF and the receipt fails closed; rerun the command above.
 
 For a quick two-terminal smoke test, run the PICO bridge and the combined live
 loop below. The production-shaped foreground launcher separates the 200 Hz
@@ -204,15 +212,15 @@ uv run spd-vr-live \
   --record-to cache/spd/train/jenga_0001.hdf5
 ```
 
-For recording, keep the scene XML beside the verified compiler artifacts
-(`model_manifest.yaml` and `collision_manifest.yaml`); the live preflight
-checks both manifests before opening HDF5.
+For recording, keep the scene XML beside the qualified compiler artifacts and
+receipt; the live preflight checks that cached qualification before opening
+HDF5.
 
 Before opening the foreground process graph, an optional read-only preflight
 checks the PICO/RoboticsService ADB reverse entry, vendor SDK, Python
 dependencies, display, generated artifacts, Zenoh endpoint, and supervisor PID.
-Add `--require-contact` (or use it automatically with recording) to
-also enforce the contact surface-quality gate:
+Add `--require-contact` (or use it automatically with recording) to require a
+current contact-qualification receipt. This daily check should take seconds:
 
 ```bash
 uv run spd-vr-preflight --manifest generated/spd_vr/model_manifest.yaml \

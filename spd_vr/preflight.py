@@ -18,7 +18,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
-from .model_compiler.artifacts import verify_artifacts, verify_contact_qualified
+from .model_compiler.artifacts import verify_artifacts
+from .model_compiler.qualification import verify_contact_qualification_receipt
 
 
 DEFAULT_ENDPOINT = "tcp/127.0.0.1:7447"
@@ -236,17 +237,6 @@ def _check_artifacts(
         return CheckResult("artifacts", False, str(exc))
 
 
-def _invoke_contact_checker(checker: Callable[..., Any], manifest: Path, urdf: Path) -> Any:
-    """Support both the public keyword form and simple test doubles."""
-    try:
-        return checker(manifest, urdf_path=urdf)
-    except TypeError as keyword_error:
-        try:
-            return checker(manifest, urdf)
-        except TypeError:
-            raise keyword_error
-
-
 def run_checks(
     *,
     repo_root: str | Path | None = None,
@@ -266,7 +256,7 @@ def run_checks(
     port_checker: Callable[[str], tuple[bool, str]] | None = None,
     supervisor_checker: Callable[[Path], tuple[bool, str]] | None = None,
     artifact_checker: Callable[[str | Path, str | Path], Any] | None = None,
-    contact_checker: Callable[..., Any] | None = None,
+    qualification_checker: Callable[[str | Path, str | Path], Any] | None = None,
 ) -> list[CheckResult]:
     """Run read-only checks and return every result, including failures.
 
@@ -310,25 +300,30 @@ def run_checks(
             ),
             _check_dependencies(load_dependency),
         ]
-    results.extend((_check_artifacts(manifest, urdf, check_artifact), _check_port(endpoint, port_checker)))
     if require_contact:
-        checker = verify_contact_qualified if contact_checker is None else contact_checker
+        checker = (
+            verify_contact_qualification_receipt
+            if qualification_checker is None
+            else qualification_checker
+        )
         try:
-            result = _invoke_contact_checker(checker, manifest.parent / "collision_manifest.yaml", urdf)
-            # A contact checker must positively return a report/True.  Treat
-            # ``None`` as an implementation error instead of allowing a
-            # no-op test double (or future checker) to waive the gate.
-            results.append(
-                CheckResult(
-                    "contact_gate",
-                    result is not False and result is not None,
-                    "contact-qualified collision manifest"
-                    if result is not False and result is not None
-                    else "contact checker returned no positive result",
-                )
+            result = checker(manifest.parent, urdf)
+            positive = result is not False and result is not None
+            detail = (
+                f"cached contact qualification ({result.get('collision_pieces', '?')} pieces)"
+                if positive and isinstance(result, Mapping)
+                else "cached contact qualification"
+                if positive
+                else "qualification checker returned no positive result"
             )
+            results.append(CheckResult("artifacts", positive, detail))
+            results.append(CheckResult("contact_gate", positive, detail))
         except Exception as exc:
+            results.append(CheckResult("artifacts", False, str(exc)))
             results.append(CheckResult("contact_gate", False, str(exc)))
+    else:
+        results.append(_check_artifacts(manifest, urdf, check_artifact))
+    results.append(_check_port(endpoint, port_checker))
     try:
         supervisor_ok, supervisor_detail = check_supervisor(pid_file)
     except Exception as exc:

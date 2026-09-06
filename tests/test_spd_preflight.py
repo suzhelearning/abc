@@ -48,8 +48,7 @@ def test_preflight_contact_gate_is_explicit_and_fail_closed(tmp_path):
         dependency_loader=lambda name: object(),
         port_checker=lambda endpoint: (True, "free"),
         supervisor_checker=lambda path: (True, "not running"),
-        artifact_checker=lambda manifest, urdf: (True, "verified"),
-        contact_checker=lambda path, **kwargs: (_ for _ in ()).throw(ValueError("p95 exceeds gate")),
+        qualification_checker=lambda output, urdf: (_ for _ in ()).throw(ValueError("p95 exceeds gate")),
         require_contact=True,
     )
     gate = next(item for item in results if item.name == "contact_gate")
@@ -57,18 +56,18 @@ def test_preflight_contact_gate_is_explicit_and_fail_closed(tmp_path):
     assert "p95" in gate.detail
 
 
-def test_preflight_accepts_positional_contact_checker(tmp_path):
+def test_preflight_accepts_cached_qualification(tmp_path):
     results = preflight.run_checks(
         repo_root=tmp_path,
         fake_source_path=tmp_path / "input.jsonl",
         dependency_loader=lambda name: object(),
         port_checker=lambda endpoint: (True, "free"),
         supervisor_checker=lambda path: (True, "not running"),
-        artifact_checker=lambda manifest, urdf: (True, "verified"),
-        contact_checker=lambda manifest, urdf: True,
+        qualification_checker=lambda output, urdf: {"collision_pieces": 62},
         require_contact=True,
     )
     assert next(item for item in results if item.name == "contact_gate").ok
+    assert "62 pieces" in next(item for item in results if item.name == "artifacts").detail
 
 
 def test_preflight_rejects_contact_checker_without_positive_report(tmp_path):
@@ -78,8 +77,7 @@ def test_preflight_rejects_contact_checker_without_positive_report(tmp_path):
         dependency_loader=lambda name: object(),
         port_checker=lambda endpoint: (True, "free"),
         supervisor_checker=lambda path: (True, "not running"),
-        artifact_checker=lambda manifest, urdf: (True, "verified"),
-        contact_checker=lambda manifest, **kwargs: None,
+        qualification_checker=lambda output, urdf: None,
         require_contact=True,
     )
     gate = next(item for item in results if item.name == "contact_gate")

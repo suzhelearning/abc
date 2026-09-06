@@ -116,19 +116,13 @@ def run(args: argparse.Namespace) -> int:
     elif args.episode_id is not None:
         raise ValueError("--episode-id requires --collection-plan")
     if args.record_to is not None:
-        from .model_compiler.artifacts import (
-            verify_artifacts,
-            verify_contact_qualified,
-        )
+        from .model_compiler.qualification import verify_contact_qualification_receipt
 
-        collision_manifest = model_path.parent / "collision_manifest.yaml"
-        verify_contact_qualified(collision_manifest, urdf_path=urdf_path)
+        verify_contact_qualification_receipt(model_path.parent, urdf_path)
         # Verify the authoritative base artifacts as well.  A scene XML is
         # allowed to add free task bodies, but it must live beside a verified
         # compiler output and carry its own scene-manifest model hash.
-        base_manifest = model_path.parent / "model_manifest.yaml"
-        verified = verify_artifacts(base_manifest, urdf_path)
-        if scene_manifest is None and verified.full_model.resolve() != model_path:
+        if scene_manifest is None and (model_path.parent / "unified_plant.xml").resolve() != model_path:
             raise ValueError("recording without --scene-manifest requires the verified unified_plant.xml")
     teleop_config = TeleopConfig(urdf_path=str(urdf_path))
     robot = RobotSpec.from_urdf(urdf_path)

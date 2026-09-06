@@ -346,11 +346,10 @@ def _source_hashes(root: Path) -> dict[str, str]:
 
 
 def _preflight_recording(model_path: Path, urdf_path: Path, scene_manifest: dict[str, Any] | None) -> None:
-    from .model_compiler.artifacts import verify_artifacts, verify_contact_qualified
+    from .model_compiler.qualification import verify_contact_qualification_receipt
 
-    verify_contact_qualified(model_path.parent / "collision_manifest.yaml", urdf_path=urdf_path)
-    verified = verify_artifacts(model_path.parent / "model_manifest.yaml", urdf_path)
-    if scene_manifest is None and verified.full_model.resolve() != model_path.resolve():
+    verify_contact_qualification_receipt(model_path.parent, urdf_path)
+    if scene_manifest is None and (model_path.parent / "unified_plant.xml").resolve() != model_path.resolve():
         raise ValueError("recording without --scene-manifest requires verified unified_plant.xml")
 
 

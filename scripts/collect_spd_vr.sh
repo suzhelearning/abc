@@ -16,6 +16,10 @@ Terminal 2: run `uv run spd-control --pedal`.
 RUN_DIR must contain collection-plan.json and EPISODE_ID.scene.json. The
 matching scene model is read from generated/spd_vr/EPISODE_ID.xml, and the
 episode is published atomically to RUN_DIR/EPISODE_ID.hdf5.
+
+Prerequisite after each model build/change:
+  uv run spd-model --verify --verify-contact --write-receipt \
+    --urdf assets/tianji_wuji2/tianji_wuji2.urdf --output generated/spd_vr
 EOF
 }
 

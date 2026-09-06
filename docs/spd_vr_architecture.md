@@ -131,11 +131,18 @@ and every published record is measured against the bidirectional surface p95
 gate. The lower-level CoACD backend remains available for diagnostics and
 explicit callers, but a CoACD miss never falls back silently. A successful
 raw build is not evidence of contact accuracy.
-`spd-model --verify --verify-contact` and any live run with `--record-to`
-enforce this gate; raw or unqualified artifacts are rejected before the
-recorder opens.
+`spd-model --verify --verify-contact --write-receipt` performs the complete
+gate once and atomically writes `contact_qualification.json`. The receipt binds
+the authoritative URDF, both manifests, both model XMLs and the complete proxy
+inventory. A live run with `--record-to` uses the cached receipt: it re-hashes
+the five small authoritative files and checks every proxy's size and
+nanosecond mtime without constructing a MuJoCo model. Raw, unqualified, or
+changed artifacts are rejected before the recorder opens. The bounded
+acceptance command deliberately keeps the full cryptographic/model-load check
+for formal evidence.
 
-`spd-vr-preflight` provides the corresponding read-only process-graph check.
+`spd-vr-preflight --require-contact` provides the corresponding fast,
+read-only process-graph check.
 It reports JSON results for ADB/RoboticsService, the vendor SDK, Python
 dependencies, display, generated artifacts, Zenoh endpoint, foreground
 supervisor PID, and optionally the contact gate. The launcher accepts `--preflight` and
