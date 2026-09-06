@@ -28,6 +28,7 @@ mode="detach"
 action="start"
 dry_run=0
 run_preflight=0
+show_viewer=0
 
 usage() {
   cat <<'EOF'
@@ -40,6 +41,7 @@ Actions:
 
 Start options:
   --attach | --detach      attach after start, or return immediately (default)
+  --viewer                 show the interactive MuJoCo window
   --endpoint ENDPOINT      Zenoh endpoint (default tcp/127.0.0.1:7447)
   --model PATH             complete MuJoCo model
   --arm-model PATH         arm-only IK model
@@ -75,6 +77,7 @@ while (($#)); do
     --dry-run) dry_run=1; shift ;;
     --attach) mode="attach"; shift ;;
     --detach) mode="detach"; shift ;;
+    --viewer) show_viewer=1; shift ;;
     --endpoint) need_value "$@"; endpoint="$2"; shift 2 ;;
     --model) need_value "$@"; model="$2"; shift 2 ;;
     --arm-model) need_value "$@"; arm_model="$2"; shift 2 ;;
@@ -153,6 +156,9 @@ q() { printf '%q' "$1"; }
 viewer_command=(uv run python -m spd_vr.viewer --model "$model" --urdf "$urdf" \
   --left-hand-config "$left_hand_config" --right-hand-config "$right_hand_config" \
   --endpoint "$endpoint" --listen)
+if ((show_viewer)); then
+  viewer_command+=(--viewer)
+fi
 arm_command=(uv run python -m spd_vr.arm_ik --model "$arm_model" --urdf "$urdf" \
   --endpoint "$endpoint")
 if [[ -n "$fake_source" ]]; then

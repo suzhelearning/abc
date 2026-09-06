@@ -128,20 +128,40 @@ uv run spd-vr-preflight \
   --require-contact > preflight-pico.json
 ```
 
+Select an episode from the approved collection plan and build its deterministic
+scene model before launch.  Keep the scene XML beside `model_manifest.yaml` so
+the launcher can verify the authoritative base/contact artifacts as well as
+the scene model hash:
+
+```bash
+EPISODE_ID=<planned-episode-id>
+EPISODE_TASK="$(jq -r --arg id "$EPISODE_ID" '.episodes[] | select(.episode_id == $id) | .task' /lab-runs/<run-id>/collection-plan.json)"
+EPISODE_SEED="$(jq -r --arg id "$EPISODE_ID" '.episodes[] | select(.episode_id == $id) | .seed' /lab-runs/<run-id>/collection-plan.json)"
+
+uv run spd-scene \
+  --scene "$EPISODE_TASK" --seed "$EPISODE_SEED" \
+  --base-model generated/spd_vr/unified_plant.xml \
+  --output-model "generated/spd_vr/${EPISODE_ID}.xml" \
+  --manifest "/lab-runs/<run-id>/${EPISODE_ID}.scene.json"
+```
+
 Then launch the real three-window graph. Use a new output path for every run;
-never overwrite a failed episode while diagnosing it.
+never overwrite a failed episode while diagnosing it.  `--viewer` exposes the
+interactive MuJoCo window while the same viewer process remains the only owner
+of the full plant and recorder.
 
 ```bash
 scripts/start_spd_vr.sh --detach --preflight \
+  --viewer \
   --serial <pico-device-id> \
   --sdk-library /path/to/libPXREARobotSDK.so \
-  --model generated/spd_vr/unified_plant.xml \
+  --model "generated/spd_vr/${EPISODE_ID}.xml" \
   --arm-model generated/spd_vr/arm_ik.xml \
   --urdf assets/tianji_wuji2/tianji_wuji2.urdf \
-  --scene-manifest /lab-runs/<run-id>/scene.json \
-  --record-to /lab-runs/<run-id>/episode.hdf5 \
+  --scene-manifest "/lab-runs/<run-id>/${EPISODE_ID}.scene.json" \
+  --record-to "/lab-runs/<run-id>/${EPISODE_ID}.hdf5" \
   --collection-plan /lab-runs/<run-id>/collection-plan.json \
-  --episode-id <planned-episode-id> \
+  --episode-id "$EPISODE_ID" \
   --collection-run-id <run-id> \
   --operator-id <operator-id> \
   --pico-serial <pico-device-id> \

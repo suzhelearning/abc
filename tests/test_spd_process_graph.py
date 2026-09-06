@@ -307,6 +307,7 @@ def test_three_window_launcher_fake_source_shutdown_option_is_wired():
         [
             str(script),
             "--dry-run",
+            "--viewer",
             "--fake-source-jsonl",
             "/tmp/spd-events.jsonl",
             "--wait-for-shutdown",
@@ -338,6 +339,10 @@ def test_three_window_launcher_fake_source_shutdown_option_is_wired():
     )
     assert result.returncode == 0, result.stderr
     assert "pxrea_bridge:" in result.stdout
+    viewer_line = next(
+        line for line in result.stdout.splitlines() if line.startswith("viewer:")
+    )
+    assert "--viewer" in viewer_line
     assert "--fake-source-jsonl /tmp/spd-events.jsonl" in result.stdout
     assert "--wait-for-shutdown" in result.stdout
     assert "--require-usable-training" in result.stdout

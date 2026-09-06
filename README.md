@@ -127,6 +127,7 @@ uv run spd-pico-bridge --sdk-library /path/to/libpxrea.so
 
 # Three windows: viewer (Zenoh router + plant), arm_ik, pxrea_bridge.
 scripts/start_spd_vr.sh --detach \
+  --viewer \
   --model generated/spd_vr/unified_plant.xml \
   --arm-model generated/spd_vr/arm_ik.xml \
   --sdk-library /path/to/libpxrea.so
