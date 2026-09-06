@@ -1,4 +1,4 @@
-"""60 Hz MuJoCo viewer/recorder for the SPD-VR three-window graph.
+"""60 Hz MuJoCo viewer/recorder for the SPD-VR three-process graph.
 
 The viewer is the only process that owns the complete plant.  It consumes arm
 targets from :mod:`spd_vr.arm_ik`, retargets PICO hands with Wuji2, and writes

@@ -1,4 +1,4 @@
-"""200 Hz dual-arm IK process for the SPD-VR three-window graph.
+"""200 Hz dual-arm IK process for the SPD-VR three-process graph.
 
 The process consumes the 1,540-byte PICO tracking stream and publishes the
 2×7 arm targets as 272-byte packets.  It never owns the full plant and never

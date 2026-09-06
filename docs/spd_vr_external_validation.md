@@ -145,33 +145,28 @@ uv run spd-scene \
   --manifest "/lab-runs/<run-id>/${EPISODE_ID}.scene.json"
 ```
 
-Then launch the real three-window graph. Use a new output path for every run;
-never overwrite a failed episode while diagnosing it.  `--viewer` exposes the
-interactive MuJoCo window while the same viewer process remains the only owner
-of the full plant and recorder.
+Then launch the real three-process graph in terminal 1. Use a new output path
+for every run; never overwrite a failed episode while diagnosing it. `--viewer`
+exposes the interactive MuJoCo window while the same viewer process remains the
+only owner of the full plant and recorder. The foreground supervisor prefixes
+all three process logs and stops the remaining children when the viewer exits.
 
 ```bash
-scripts/start_spd_vr.sh --detach --preflight \
-  --viewer \
-  --serial <pico-device-id> \
-  --sdk-library /path/to/libPXREARobotSDK.so \
-  --model "generated/spd_vr/${EPISODE_ID}.xml" \
-  --arm-model generated/spd_vr/arm_ik.xml \
-  --urdf assets/tianji_wuji2/tianji_wuji2.urdf \
-  --scene-manifest "/lab-runs/<run-id>/${EPISODE_ID}.scene.json" \
-  --record-to "/lab-runs/<run-id>/${EPISODE_ID}.hdf5" \
-  --collection-plan /lab-runs/<run-id>/collection-plan.json \
-  --episode-id "$EPISODE_ID" \
-  --collection-run-id <run-id> \
-  --operator-id <operator-id> \
-  --pico-serial <pico-device-id> \
-  --require-usable-training
+scripts/collect_spd_vr.sh /lab-runs/<run-id> "$EPISODE_ID"
+```
 
-scripts/start_spd_vr.sh --status
-# In a dedicated terminal, use the three-button pedal controller:
+This high-level command reads the formal identity from `collection-plan.json`
+and expands to the full `start_spd_vr.sh` foreground arguments. Use
+`--dry-run` as the optional third argument to inspect the expansion without
+starting any process.
+
+In terminal 2, keep the three-button pedal controller in the foreground:
+
+```bash
 uv run spd-control --pedal
 # R = realign, S = pause/resume, D = shutdown and publish the HDF5 episode.
 # q/Esc/Ctrl-C exits the controller without shutdown.
+# Use this only when an emergency/manual supervisor stop is required:
 scripts/stop_spd_vr.sh
 ```
 

@@ -17,11 +17,13 @@ def test_preflight_reports_structured_failure_without_mutating_adb(tmp_path):
         dependency_loader=lambda name: object(),
         display_env={"DISPLAY": ":99"},
         port_checker=lambda endpoint: (True, "free"),
-        session_checker=lambda name: (True, "not running"),
+        supervisor_checker=lambda path: (True, "not running"),
         artifact_checker=lambda manifest, urdf: (False, "authoritative URDF hash mismatch"),
     )
     assert all(isinstance(item, preflight.CheckResult) for item in results)
     assert next(item for item in results if item.name == "artifacts").ok is False
+    assert next(item for item in results if item.name == "supervisor").ok is True
+    assert not any(command and command[0] == "tmux" for command in calls)
     assert not any(command[1:2] == ["reverse"] and command[-1] != "--list" for command in calls)
 
 
@@ -45,7 +47,7 @@ def test_preflight_contact_gate_is_explicit_and_fail_closed(tmp_path):
         fake_source_path=tmp_path / "input.jsonl",
         dependency_loader=lambda name: object(),
         port_checker=lambda endpoint: (True, "free"),
-        session_checker=lambda name: (True, "not running"),
+        supervisor_checker=lambda path: (True, "not running"),
         artifact_checker=lambda manifest, urdf: (True, "verified"),
         contact_checker=lambda path, **kwargs: (_ for _ in ()).throw(ValueError("p95 exceeds gate")),
         require_contact=True,
@@ -61,7 +63,7 @@ def test_preflight_accepts_positional_contact_checker(tmp_path):
         fake_source_path=tmp_path / "input.jsonl",
         dependency_loader=lambda name: object(),
         port_checker=lambda endpoint: (True, "free"),
-        session_checker=lambda name: (True, "not running"),
+        supervisor_checker=lambda path: (True, "not running"),
         artifact_checker=lambda manifest, urdf: (True, "verified"),
         contact_checker=lambda manifest, urdf: True,
         require_contact=True,
@@ -75,7 +77,7 @@ def test_preflight_rejects_contact_checker_without_positive_report(tmp_path):
         fake_source_path=tmp_path / "input.jsonl",
         dependency_loader=lambda name: object(),
         port_checker=lambda endpoint: (True, "free"),
-        session_checker=lambda name: (True, "not running"),
+        supervisor_checker=lambda path: (True, "not running"),
         artifact_checker=lambda manifest, urdf: (True, "verified"),
         contact_checker=lambda manifest, **kwargs: None,
         require_contact=True,

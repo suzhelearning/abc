@@ -113,7 +113,7 @@ uv run spd-model --verify --verify-contact \
 ```
 
 For a quick two-terminal smoke test, run the PICO bridge and the combined live
-loop below. The production-shaped three-window launcher separates the 200 Hz
+loop below. The production-shaped foreground launcher separates the 200 Hz
 arm-IK process from the 60 Hz viewer: only the viewer owns the complete
 MuJoCo plant, while the arm process publishes the 272-byte arm-target frame.
 
@@ -125,13 +125,14 @@ uv run spd-vr-live \
 
 uv run spd-pico-bridge --sdk-library /path/to/libpxrea.so
 
-# Three windows: viewer (Zenoh router + plant), arm_ik, pxrea_bridge.
-scripts/start_spd_vr.sh --detach \
+# Production graph: one foreground supervisor owns viewer, arm_ik, and pxrea_bridge.
+scripts/start_spd_vr.sh \
   --viewer \
   --model generated/spd_vr/unified_plant.xml \
   --arm-model generated/spd_vr/arm_ik.xml \
   --sdk-library /path/to/libpxrea.so
 # If multiple PICO devices are online, add --serial <device-id>.
+# From another terminal, status and emergency stop remain available:
 scripts/start_spd_vr.sh --status
 scripts/stop_spd_vr.sh
 ```
@@ -207,10 +208,10 @@ For recording, keep the scene XML beside the verified compiler artifacts
 (`model_manifest.yaml` and `collision_manifest.yaml`); the live preflight
 checks both manifests before opening HDF5.
 
-Before opening the three-window process graph, an optional read-only preflight
+Before opening the foreground process graph, an optional read-only preflight
 checks the PICO/RoboticsService ADB reverse entry, vendor SDK, Python
-dependencies, display, generated artifacts, Zenoh endpoint, and managed tmux
-session.  Add `--require-contact` (or use it automatically with recording) to
+dependencies, display, generated artifacts, Zenoh endpoint, and supervisor PID.
+Add `--require-contact` (or use it automatically with recording) to
 also enforce the contact surface-quality gate:
 
 ```bash
@@ -258,7 +259,7 @@ uv run spd-vr-dataset-audit cache/spd/train \
   --require-metadata --require-usable-training
 ```
 
-The live and three-window viewer accept `--collection-run-id`,
+The live and foreground-supervised viewer accept `--collection-run-id`,
 `--operator-id`, and `--pico-serial` and persist them in the episode manifest;
 all three are required together for a formal identity record. The aggregate
 gate counts only contact-qualified duration, never idle file length. Code that
@@ -276,6 +277,17 @@ uv run spd-vr-collection-plan \
   --seed-start 1000 \
   --run-id <run-id> --operator-id <operator-id> --pico-serial <pico-device-id>
 ```
+
+Once the episode scene XML and scene manifest have been built, formal
+collection needs only the run directory and planned episode ID in terminal 1:
+
+```bash
+scripts/collect_spd_vr.sh /lab-runs/<run-id> <planned-episode-id>
+```
+
+The wrapper reads collection identity from the plan, enables the viewer,
+preflight, contact/training gates, and runs the three processes under the same
+foreground supervisor. Terminal 2 runs `uv run spd-control --pedal`.
 
 The artifact is explicitly marked `status: planned` and `data_collected: false`;
 it is not a substitute for HDF5 episodes or the 75-hour collection audit. The

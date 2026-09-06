@@ -12,7 +12,6 @@ import argparse
 import importlib
 import json
 import os
-import shutil
 import socket
 import subprocess
 from dataclasses import dataclass
@@ -22,7 +21,6 @@ from typing import Any, Callable, Mapping, Sequence
 from .model_compiler.artifacts import verify_artifacts, verify_contact_qualified
 
 
-SESSION_NAME = "spd-vr"
 DEFAULT_ENDPOINT = "tcp/127.0.0.1:7447"
 DEFAULT_SDK_LIBRARY = "/opt/apps/roboticsservice/SDK/x64/libPXREARobotSDK.so"
 ARTIFACT_FILES = (
@@ -190,16 +188,31 @@ def _check_port(endpoint: str, checker: Callable[[str], tuple[bool, str]] | None
     return CheckResult("port_7447", bool(ok), str(detail))
 
 
-def _check_session(session_name: str, run_command: RunCommand) -> tuple[bool, str]:
-    if shutil.which("tmux") is None:
-        return False, "tmux is unavailable"
+def default_supervisor_pid_file(
+    environment: Mapping[str, str] | None = None,
+) -> Path:
+    values = os.environ if environment is None else environment
+    runtime_root = Path(values.get("XDG_RUNTIME_DIR", "/tmp"))
+    return runtime_root / f"spd-vr-{os.getuid()}" / "supervisor.pid"
+
+
+def _check_supervisor(pid_file: Path) -> tuple[bool, str]:
+    if not pid_file.exists():
+        return True, f"foreground supervisor is absent: {pid_file}"
     try:
-        result = run_command(["tmux", "has-session", "-t", session_name])
-    except OSError as exc:
-        return False, f"tmux unavailable: {exc}"
-    if result.returncode == 0:
-        return False, f"session already exists: {session_name}"
-    return True, f"session is absent: {session_name}"
+        value = pid_file.read_text(encoding="utf-8").strip()
+        pid = int(value)
+    except (OSError, ValueError) as exc:
+        return False, f"invalid supervisor pid file {pid_file}: {exc}"
+    if pid <= 1:
+        return False, f"invalid supervisor pid in {pid_file}: {pid}"
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return True, f"stale supervisor pid file (pid {pid} is absent): {pid_file}"
+    except PermissionError:
+        return False, f"foreground supervisor pid {pid} exists but is not inspectable"
+    return False, f"foreground supervisor is already running: pid={pid}"
 
 
 def _check_artifacts(
@@ -241,7 +254,7 @@ def run_checks(
     manifest_path: str | Path | None = None,
     urdf_path: str | Path | None = None,
     endpoint: str = DEFAULT_ENDPOINT,
-    session_name: str = SESSION_NAME,
+    supervisor_pid_file: str | Path | None = None,
     selected_serial: str | None = None,
     expected_reverse: str | None = None,
     fake_source_path: str | Path | None = None,
@@ -251,7 +264,7 @@ def run_checks(
     dependency_loader: Callable[[str], Any] | None = None,
     display_env: Mapping[str, str] | None = None,
     port_checker: Callable[[str], tuple[bool, str]] | None = None,
-    session_checker: Callable[[str], tuple[bool, str]] | None = None,
+    supervisor_checker: Callable[[Path], tuple[bool, str]] | None = None,
     artifact_checker: Callable[[str | Path, str | Path], Any] | None = None,
     contact_checker: Callable[..., Any] | None = None,
 ) -> list[CheckResult]:
@@ -259,7 +272,7 @@ def run_checks(
 
     ``fake_source_path`` is intended for protocol/CI smoke only.  It skips
     ADB and the vendor shared object but still checks Python dependencies,
-    artifacts, the endpoint and the managed tmux session.
+    artifacts, the endpoint and the foreground supervisor.
     """
     root = Path(repo_root) if repo_root is not None else Path(__file__).resolve().parents[1]
     sdk_default = os.environ.get(
@@ -276,8 +289,13 @@ def run_checks(
 
         load_sdk = lambda path: PXREAClient.load_library(path)
     load_dependency = importlib.import_module if dependency_loader is None else dependency_loader
-    check_session = (lambda name: _check_session(name, command)) if session_checker is None else session_checker
     environment = os.environ if display_env is None else display_env
+    pid_file = (
+        default_supervisor_pid_file(environment)
+        if supervisor_pid_file is None
+        else Path(supervisor_pid_file)
+    )
+    check_supervisor = _check_supervisor if supervisor_checker is None else supervisor_checker
     check_artifact = verify_artifacts if artifact_checker is None else artifact_checker
     if fake_source_path is None:
         results = _check_adb(command, selected_serial=selected_serial, expected_reverse=expected_reverse)
@@ -312,10 +330,10 @@ def run_checks(
         except Exception as exc:
             results.append(CheckResult("contact_gate", False, str(exc)))
     try:
-        session_ok, session_detail = check_session(session_name)
+        supervisor_ok, supervisor_detail = check_supervisor(pid_file)
     except Exception as exc:
-        session_ok, session_detail = False, str(exc)
-    results.append(CheckResult("session", bool(session_ok), str(session_detail)))
+        supervisor_ok, supervisor_detail = False, str(exc)
+    results.append(CheckResult("supervisor", bool(supervisor_ok), str(supervisor_detail)))
     return results
 
 
@@ -329,7 +347,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--endpoint", default=DEFAULT_ENDPOINT)
     parser.add_argument("--serial", default=None)
     parser.add_argument("--expected-reverse", default=None)
-    parser.add_argument("--session", default=SESSION_NAME)
+    parser.add_argument("--supervisor-pid-file", type=Path, default=None)
     parser.add_argument("--require-contact", action="store_true", help="also require the contact surface-quality gate")
     args = parser.parse_args(argv)
     results = run_checks(
@@ -338,7 +356,7 @@ def main(argv: list[str] | None = None) -> int:
         manifest_path=args.manifest,
         urdf_path=args.urdf,
         endpoint=args.endpoint,
-        session_name=args.session,
+        supervisor_pid_file=args.supervisor_pid_file,
         selected_serial=args.serial,
         fake_source_path=args.fake_source,
         expected_reverse=args.expected_reverse,
@@ -353,7 +371,7 @@ __all__ = [
     "ARTIFACT_FILES",
     "CheckResult",
     "DEFAULT_ENDPOINT",
-    "SESSION_NAME",
+    "default_supervisor_pid_file",
     "main",
     "run_checks",
 ]

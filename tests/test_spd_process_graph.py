@@ -1,7 +1,9 @@
-import numpy as np
-from types import SimpleNamespace
-from pathlib import Path
+import json
 import subprocess
+from pathlib import Path
+from types import SimpleNamespace
+
+import numpy as np
 
 from spd_vr.arm_ik import DualArmIKController
 from spd_vr.alignment import SideAlignment
@@ -300,9 +302,19 @@ def test_episode_state_machine_guards_contact_and_supports_revert_pause_skip():
     assert recorder.discarded == ["operator_skip"]
 
 
-def test_three_window_launcher_fake_source_shutdown_option_is_wired():
-    """Keep the reproducible CI process graph separate from the SDK path."""
+def test_foreground_launcher_fake_source_shutdown_option_is_wired():
+    """Run the complete graph in one foreground supervisor without tmux."""
     script = Path(__file__).resolve().parents[1] / "scripts" / "start_spd_vr.sh"
+    help_result = subprocess.run(
+        [str(script), "--help"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert help_result.returncode == 0, help_result.stderr
+    assert "foreground supervisor" in help_result.stdout
+    assert "tmux" not in help_result.stdout.lower()
+
     result = subprocess.run(
         [
             str(script),
@@ -338,6 +350,7 @@ def test_three_window_launcher_fake_source_shutdown_option_is_wired():
         text=True,
     )
     assert result.returncode == 0, result.stderr
+    assert "mode=foreground" in result.stdout
     assert "pxrea_bridge:" in result.stdout
     viewer_line = next(
         line for line in result.stdout.splitlines() if line.startswith("viewer:")
@@ -378,7 +391,6 @@ def test_three_window_launcher_fake_source_shutdown_option_is_wired():
     )
     assert missing_record.returncode == 2
     assert "requires --record-to" in missing_record.stderr
-
     partial_collection = subprocess.run(
         [str(script), "--dry-run", "--collection-run-id", "run-001"],
         check=False,
@@ -432,3 +444,47 @@ def test_three_window_launcher_fake_source_shutdown_option_is_wired():
     )
     assert plan_without_scene.returncode == 2
     assert "requires --record-to and --scene-manifest" in plan_without_scene.stderr
+
+
+def test_collection_launcher_derives_formal_run_arguments(tmp_path):
+    run_dir = tmp_path / "run-001"
+    run_dir.mkdir()
+    (run_dir / "collection-plan.json").write_text(
+        json.dumps(
+            {
+                "collection_identity": {
+                    "run_id": "run-001",
+                    "operator_id": "operator-01",
+                    "pico_serial": "pico-01",
+                },
+                "episodes": [
+                    {
+                        "episode_id": "jenga--hollow_tower-0001",
+                        "task": "jenga/hollow_tower",
+                        "seed": 1000,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    script = Path(__file__).resolve().parents[1] / "scripts" / "collect_spd_vr.sh"
+    result = subprocess.run(
+        [
+            str(script),
+            str(run_dir),
+            "jenga--hollow_tower-0001",
+            "--dry-run",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "mode=foreground" in result.stdout
+    assert f"--collection-plan {run_dir}/collection-plan.json" in result.stdout
+    assert "--episode-id jenga--hollow_tower-0001" in result.stdout
+    assert "--collection-run-id run-001" in result.stdout
+    assert "--operator-id operator-01" in result.stdout
+    assert "--pico-serial pico-01" in result.stdout
+    assert f"--record-to {run_dir}/jenga--hollow_tower-0001.hdf5" in result.stdout

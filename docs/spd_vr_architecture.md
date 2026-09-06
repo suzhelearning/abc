@@ -84,7 +84,7 @@ Accepted targets are also rate-limited from URDF joint velocity limits at the
 - `EpisodeWriter(require_usable_training=True)` adds a formal-data gate before
   the atomic rename; it rejects a recording with no complete contact-eligible
   258-row SPD window. The live viewer, combined smoke entry, lifecycle recorder, and
-  three-window launcher expose this as `--require-usable-training`.
+  foreground launcher expose this as `--require-usable-training`.
 
 Zenoh process keys have fixed payload sizes: `spd/vr/v1/tracking` is 1,540
 bytes, `spd/vr/v1/arm_targets` is 272 bytes, and `spd/vr/v1/control` is 40
@@ -137,8 +137,8 @@ recorder opens.
 
 `spd-vr-preflight` provides the corresponding read-only process-graph check.
 It reports JSON results for ADB/RoboticsService, the vendor SDK, Python
-dependencies, display, generated artifacts, Zenoh endpoint, tmux session, and
-optionally the contact gate.  The launcher accepts `--preflight` and
+dependencies, display, generated artifacts, Zenoh endpoint, foreground
+supervisor PID, and optionally the contact gate. The launcher accepts `--preflight` and
 `--serial <device-id>`; it never creates an ADB reverse entry itself.
 
 `spd-vr-acceptance` is the bounded P6 acceptance command.  It validates the
@@ -165,7 +165,7 @@ the same registry into all 17 Table-2 task quotas and 1,916 deterministic
 episode IDs (75.25 qualified hours), but remains explicitly
 `data_collected: false`; only HDF5 episodes accepted by the collection audit
 can contribute to the formal target.
-The viewer, direct live loop and three-window launcher can bind a recording to
+The viewer, direct live loop and foreground launcher can bind a recording to
 one plan episode; task, reset seed and (when present) collection identity are
 checked before the writer opens, and the plan path/hash are preserved in the
 episode manifest.
