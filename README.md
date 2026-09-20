@@ -129,6 +129,11 @@ uv sync --extra dev
 `uv run` 会使用该项目环境，不要直接借用另一个 checkout 的 Python 环境。
 SPD 训练和仿真不需要 `uv sync --extra deploy`，安装该 extra 也不会增加 Tianji 真机控制能力。
 
+`pyproject.toml` 已将清华 PyPI 镜像设为默认源；`torch` 与 `torchcodec` 仍分别使用官方 CUDA 12.8 / CPU 专用源。
+直接执行 `uv sync --extra dev` 即可，无需另建 `uv.toml`。临时切换默认源可使用 `--default-index URL`。
+慢速连接可设置 `UV_HTTP_TIMEOUT=300`；它只延长超时，不会提速。修改源配置后，需要重新运行安装命令，
+已运行的下载进程不会自动切换源；不要为此删除 `.venv` 或清空缓存。
+
 ### 安装检查
 
 ```bash
