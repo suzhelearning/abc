@@ -1,9 +1,10 @@
 """Launch ABC training.
 
-Trains the ABC-DiT policy by default, or ABC-VLA with
-``--policy vla`` (supply the Gemma base checkpoint via
-``--vla-model.backbone.checkpoint``). Run ``python train.py --help`` for the
-full flag surface."""
+Trains ABC-DiT by default, ABC-VLA with ``--policy vla``, or Tianji/Wuji2 SPD
+with ``--policy spd``. VLA takes ``--vla-model.backbone.checkpoint``; SPD takes
+``--spd-data.root`` and ``--spd-data.dino-checkpoint``. See the package README
+for policy recipes and ``python train.py --help`` for all flags.
+"""
 
 import tyro
 

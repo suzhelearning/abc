@@ -1,4 +1,4 @@
-"""Reusable ABC-DiT and VLA inference policies for sim and real deployment."""
+"""Reusable ABC-DiT, VLA, and stateful Tianji SPD inference interfaces."""
 
 from __future__ import annotations
 
@@ -14,6 +14,7 @@ import torch
 from abc_minimal.checkpointing import model_state_dict
 from abc_minimal.config import (
     FlowConfig,
+    SPDConfig,
     VLAModelConfig,
     validate_vla_checkpoint_config,
 )
@@ -26,7 +27,6 @@ from abc_minimal.preprocess import (
     resize_pad_normalize_batch,
     unnormalize,
 )
-from abc_minimal.vla import VLAPolicy, inference_model_config, stack_camera_batch
 
 
 def resolve_norm_stats(ckpt: dict[str, Any], override: str | None) -> dict[str, Any]:
@@ -348,6 +348,8 @@ class VLAInferencePolicy(InferencePolicy):
     """
 
     def __init__(self, checkpoint: Path, config: Any, device: str, model_config: Any = None):
+        from abc_minimal.vla import VLAPolicy, inference_model_config
+
         self.config = config
         self.model_config = model_config if model_config is not None else config.model
         self.device = torch.device(device)
@@ -430,6 +432,8 @@ class VLAInferencePolicy(InferencePolicy):
             images[cam] = resize_pad_normalize_batch(
                 image if batched else image[None], image_size, image_size, preset=None
             )
+        from abc_minimal.vla import stack_camera_batch
+
         batch = stack_camera_batch(
             {
                 "state": torch.from_numpy(state).to(self.device),
@@ -457,3 +461,131 @@ class VLAInferencePolicy(InferencePolicy):
         actions_np = actions.float().detach().cpu().numpy()
         actions_np = unnormalize(actions_np, self.norm_stats["actions"]).astype(np.float32)
         return actions_np if batched else actions_np[0]
+
+
+@dataclass
+class SPDPolicyConfig(InferenceConfig):
+    """Stateful Tianji inference; DINO is supplied separately from slim checkpoints."""
+    prompt: str = ""
+    model: SPDConfig = field(default_factory=SPDConfig)
+    dino_checkpoint: str = ""
+    dino_bf16: bool = True
+    use_ema: bool = True
+
+
+class SPDInferencePolicy:
+    """ABC-style physical-unit inference over SPD's stateful observation cache.
+
+    Call observe() every control tick, then infer() on chunk boundaries. Calling
+    infer(obs) appends that observation first. previous_actions must be the prior
+    measured joint positions, not previous predicted commands. Camera frames
+    are subsampled at the model's stride. No actuator or YAM simulator is driven.
+    """
+
+    def __init__(self, checkpoint: Path, config: SPDPolicyConfig, device: str, model_config=None):
+        import hashlib
+        from abc_minimal.checkpointing import load_checkpoint
+        from abc_minimal.spd import SPDPolicy, load_spd_checkpoint
+        from abc_minimal.tianji_data import validate_spd_norm_stats
+
+        if config.fast_inference or config.rtc_prefix_length is not None:
+            raise ValueError("SPD uses its rolling cache, not ABC-DiT CUDA-graph/RTC prefix inference")
+        if config.diffusion_steps <= 0:
+            raise ValueError("diffusion_steps must be positive")
+        self.config = config
+        self.model_config = model_config if model_config is not None else config.model
+        self.device = torch.device(device)
+        self.diffusion_steps = config.diffusion_steps
+        self.chunk_length = self.model_config.chunk_length
+        self.action_dim = self.model_config.action_dim
+        self.camera_keys = tuple(self.model_config.camera_keys)
+        ckpt, _ = load_checkpoint(checkpoint)
+        dino_path = Path(config.dino_checkpoint).expanduser()
+        digest = hashlib.sha256()
+        with dino_path.open("rb") as source:
+            for chunk in iter(lambda: source.read(1024 * 1024), b""):
+                digest.update(chunk)
+        if digest.hexdigest() != ckpt.get("dino_sha256"):
+            raise ValueError("SPD inference DINO weights differ from the training checkpoint")
+        self.model = SPDPolicy(self.model_config)
+        self.model.load_dino(dino_path)
+        load_spd_checkpoint(self.model, ckpt, use_ema=config.use_ema)
+        self.model.set_dino_bfloat16(config.dino_bf16)
+        self.model = self.model.to(self.device).eval()
+        self.norm_stats = resolve_norm_stats(ckpt, config.norm_stats_path)
+        validate_spd_norm_stats(self.norm_stats)
+        self._norm = {
+            name: {key: torch.as_tensor(value, dtype=torch.float32, device=self.device)
+                   for key, value in stats.items()}
+            for name, stats in self.norm_stats.items()
+        }
+        self.reset()
+
+    def reset(self):
+        """Begin a new episode without retaining any prior episode's observations."""
+        self.cache = None
+        self._step = -1
+        self._batched = False
+
+    @torch.no_grad()
+    def observe(self, obs: dict[str, Any], *, step: int | None = None):
+        state = torch.as_tensor(obs["state"], device=self.device, dtype=torch.float32)
+        previous = torch.as_tensor(obs["previous_actions"], device=self.device, dtype=torch.float32)
+        if state.ndim not in (1, 2) or state.shape[-1] != self.model_config.state_dim or previous.shape != state.shape:
+            raise ValueError("state and previous_actions must match [54] or [B,54]")
+        batched = state.ndim == 2
+        state = state if batched else state[None]
+        previous = previous if batched else previous[None]
+        current_step = self._step + 1 if step is None else step
+        images, validity = None, None
+        if current_step % self.model_config.image_stride == 0:
+            supplied = obs.get("images", {})
+            if set(supplied) - set(self.camera_keys):
+                raise ValueError("unknown SPD camera name")
+            raw_validity = obs.get("camera_validity")
+            if raw_validity is None:
+                if set(supplied) != set(self.camera_keys):
+                    raise ValueError("all cameras are required without camera_validity")
+                validity = torch.ones(state.shape[0], len(self.camera_keys), dtype=torch.bool, device=self.device)
+            else:
+                validity = torch.as_tensor(raw_validity, device=self.device)
+                if not batched:
+                    validity = validity[None]
+                if validity.dtype != torch.bool or validity.shape != (state.shape[0], len(self.camera_keys)):
+                    raise ValueError("camera_validity must be bool [3] or [B,3], matching state")
+            images = {}
+            for index, camera in enumerate(self.camera_keys):
+                selected = validity[:, index].nonzero(as_tuple=True)[0]
+                if not selected.numel():
+                    continue
+                if camera not in supplied:
+                    raise ValueError(f"missing valid camera: {camera}")
+                raw = torch.as_tensor(supplied[camera], device=self.device)
+                raw = raw if batched else raw[None]
+                if raw.ndim != 4 or raw.shape[:2] != (state.shape[0], 3):
+                    raise ValueError("camera images must be CHW or BCHW, matching state")
+                valid_images = resize_pad_normalize_batch(raw.index_select(0, selected), preset="imagenet")
+                images[camera] = valid_images.new_zeros((state.shape[0], 3, 224, 224)).index_copy(0, selected, valid_images)
+        cache = self.model.append_observation(
+            self.cache, normalize(state, self._norm["state"]),
+            normalize(previous, self._norm["actions"]), step=current_step,
+            images=images, camera_validity=validity,
+        )
+        self.cache, self._step, self._batched = cache, current_step, batched
+
+    @torch.no_grad()
+    def infer(self, obs=None, *, noise=None, action_prefix=None, prefix_length=None):
+        if action_prefix is not None or prefix_length not in (None, 0):
+            raise ValueError("SPD does not use ABC action-prefix conditioning")
+        if obs is not None:
+            self.observe(obs, step=obs.get("step"))
+        if self.cache is None:
+            raise ValueError("observe at least one control tick before requesting actions")
+        noise_t = None
+        if noise is not None:
+            noise_t = torch.as_tensor(noise, dtype=torch.float32, device=self.device)
+            if not self._batched:
+                noise_t = noise_t[None]
+        actions = self.model.sample_actions_cached(self.cache, self.diffusion_steps, noise_t)
+        physical = unnormalize(actions.cpu().numpy(), self.norm_stats["actions"]).astype(np.float32)
+        return physical if self._batched else physical[0]

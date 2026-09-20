@@ -9,8 +9,12 @@ conditioned, and the training/sampling forward calls.
 """
 
 import os
+import hashlib
+import json
+import random
 import time
 from copy import deepcopy
+from contextlib import nullcontext
 from dataclasses import asdict
 from pathlib import Path
 
@@ -22,6 +26,8 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 
 from abc_minimal.checkpointing import (
     check_topology,
+    capture_rng_state,
+    restore_rng_state,
     load_checkpoint,
     model_state_dict,
     fsdp_state_dicts,
@@ -50,7 +56,6 @@ from abc_minimal.dit import (
 )
 from abc_minimal.operator import load_operator_label_maps
 from abc_minimal.preprocess import load_norm_stats, parse_norm_stats
-from abc_minimal.vla import VLAPolicy, stack_camera_batch
 
 # Enable TF32-backed fp32 matmul on NVIDIA GPUs.
 torch.set_float32_matmul_precision("high")
@@ -59,12 +64,13 @@ torch.set_float32_matmul_precision("high")
 def _distributed_context():
     distributed = "RANK" in os.environ
     if distributed:
-        dist.init_process_group(backend="nccl")
+        dist.init_process_group(backend="nccl" if torch.cuda.is_available() else "gloo")
         rank, world = dist.get_rank(), dist.get_world_size()
         local_rank = int(os.environ["LOCAL_RANK"])
         local_world = int(os.environ.get("LOCAL_WORLD_SIZE", str(world)))
-        device = torch.device(f"cuda:{local_rank}")
-        torch.cuda.set_device(device)
+        device = torch.device(f"cuda:{local_rank}" if torch.cuda.is_available() else "cpu")
+        if device.type == "cuda":
+            torch.cuda.set_device(device)
     else:
         rank, world = 0, 1
         local_rank, local_world = 0, 1
@@ -79,6 +85,13 @@ def batch_to_device(batch, device, embedder, camera_keys):
     ``task_vec_clip``. VLA: images are stacked to ``(B, n_cam, C, H, W)`` and the
     raw prompt strings are carried through to the Gemma tokenizer.
     """
+    if "previous_actions" in batch:
+        return {
+            **{name: batch[name].to(device, non_blocking=True)
+               for name in ("state", "previous_actions", "actions", "camera_validity")},
+            "images": {camera: image.to(device, non_blocking=True)
+                       for camera, image in batch["images"].items()},
+        }
     out = {
         "state": batch["state"].to(device, non_blocking=True),
         "actions": batch["actions"].to(device, non_blocking=True),
@@ -93,6 +106,8 @@ def batch_to_device(batch, device, embedder, camera_keys):
         )
         return out
     # VLA path: keep raw prompts, stack cameras into a single tensor.
+    from abc_minimal.vla import stack_camera_batch
+
     out["prompt"] = batch["prompt"]
     return stack_camera_batch(out, camera_keys)
 
@@ -157,6 +172,10 @@ def _build_optimizer(model, config, is_vla, rank=0):
     DiT: the img_backbone group is scaled by ``optim.vision_lr_scale``.
     VLA: the Gemma+SigLIP backbone group is scaled by ``optim.backbone_lr_scale``.
     """
+    if config.policy == "spd":
+        from abc_minimal.spd_optim import MuonAdamW
+
+        return MuonAdamW(model, config.optim)
     if is_vla:
         backbone = [
             p for p in model.vla.gemma_model.parameters() if p.requires_grad
@@ -254,6 +273,8 @@ def _build_dit_model(config, cache_root, device, resume_ckpt, rank, distributed)
 
 def _build_vla_model(config, cache_root, device, resume_ckpt, rank):
     """Construct VLAPolicy and load its starting weights. Returns (model, norm_stats)."""
+    from abc_minimal.vla import VLAPolicy
+
     del device
     checkpoint_path = cache_root / config.pretrained_ckpt_name
     starting_ckpt = resume_ckpt
@@ -302,13 +323,58 @@ def _build_vla_model(config, cache_root, device, resume_ckpt, rank):
     return model, norm_stats
 
 
+def _build_spd_model(config, cache_root, data_scope, resume_ckpt, resume_step, rank):
+    from abc_minimal.spd import SPDPolicy, load_spd_checkpoint
+    from abc_minimal.tianji_data import prepare_spd_data
+
+    if data_scope.placement != "shared":
+        raise ValueError("SPD expects each rank to access the complete Tianji collection")
+    model = SPDPolicy(config.spd_model)
+    dino_path = Path(config.spd_data.dino_checkpoint).expanduser()
+    missing, unexpected = model.load_dino(dino_path)
+    model.set_dino_bfloat16(config.dino_bf16)
+    digest = hashlib.sha256()
+    with dino_path.open("rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(chunk)
+    dino_sha256 = digest.hexdigest()
+    starting = resume_ckpt
+    if starting is None and config.load_pretrained:
+        starting, _ = load_checkpoint(cache_root / config.pretrained_ckpt_name)
+    if starting is not None:
+        load_spd_checkpoint(model, starting)
+        if starting.get("dino_sha256") != dino_sha256:
+            raise ValueError("SPD checkpoint uses different frozen DINO weights")
+    norm_stats = (
+        starting["norm_stats"]
+        if starting is not None and config.inherit_ckpt_norm_stats else None
+    )
+    data = prepare_spd_data(config, data_scope, resume_step, norm_stats=norm_stats)
+    if resume_ckpt is not None:
+        if resume_ckpt.get("dataset_contract") != data.contract:
+            raise ValueError("SPD resume dataset, split, or normalization contract changed")
+        if resume_ckpt.get("train_config", {}).get("optim") != asdict(config.optim):
+            raise ValueError("SPD resume optimizer recipe changed")
+        for key in ("optimizer", "scheduler", "ema", "rng_by_rank"):
+            if key not in resume_ckpt:
+                raise ValueError(f"SPD resume requires checkpoint {key}")
+        if resume_ckpt.get("batch_size") != config.batch_size or resume_ckpt.get("data_world") != data_scope.world:
+            raise ValueError("SPD exact resume requires unchanged batch size and data world")
+    if rank == 0:
+        print(f"SPD DINO loaded: missing={len(missing)} unexpected={len(unexpected)}")
+        print(f"SPD parameters={sum(p.numel() for p in model.parameters())}")
+    return model, data, dino_sha256
+
+
 def main(config: TrainConfig):
     is_vla = config.policy == "vla"
+    is_spd = config.policy == "spd"
     cache_root = Path(config.cache_root).expanduser()
     if config.output_dir:
         output_dir = Path(config.output_dir).expanduser()
     else:
-        output_dir = cache_root / ("vla_checkpoints" if is_vla else "finetune_checkpoints")
+        default_output = "spd_checkpoints" if is_spd else ("vla_checkpoints" if is_vla else "finetune_checkpoints")
+        output_dir = cache_root / default_output
 
     components = validate_train_config(
         config, cache_root, cache_root / config.pretrained_ckpt_name
@@ -327,8 +393,18 @@ def main(config: TrainConfig):
 
     torch.manual_seed(config.seed + rank)
     np.random.seed(config.seed + rank)
+    random.seed(config.seed + rank)
 
-    if is_vla:
+    spd_data, dino_sha256 = None, None
+    if is_spd:
+        from abc_minimal.spd import SPD_ARCHITECTURE
+        from abc_minimal.spd_optim import EMA
+
+        model, spd_data, dino_sha256 = _build_spd_model(
+            config, cache_root, data_scope, resume_ckpt, resume_step, rank,
+        )
+        norm_stats = spd_data.norm_stats
+    elif is_vla:
         model, norm_stats = _build_vla_model(config, cache_root, device, resume_ckpt, rank)
     else:
         model, norm_stats = _build_dit_model(
@@ -349,7 +425,7 @@ def main(config: TrainConfig):
         _shard_vla(model, world, local_world)
     optimizer = _build_optimizer(model, config, is_vla, rank)
     scheduler = torch.optim.lr_scheduler.LambdaLR(
-        optimizer, lambda step: min((step + 1) / config.optim.lr_warmup_steps, 1.0)
+        optimizer, lambda step: min((step + 1) / max(config.optim.lr_warmup_steps, 1), 1.0)
     )
     if resume_ckpt is not None:
         restore_training_state(resume_ckpt, optimizer=optimizer, scheduler=scheduler,
@@ -360,34 +436,41 @@ def main(config: TrainConfig):
     # torch.compile: DiT compiles the whole module; VLA only its SigLIP tower
     # (handled above), so skip the whole-module compile for VLA.
     if config.compile and not is_vla:
-        model = torch.compile(model, fullgraph=True)
+        model = torch.compile(model, fullgraph=not is_spd)
         if rank == 0:
-            print("torch.compile(fullgraph=True) enabled")
+            print(f"torch.compile(fullgraph={not is_spd}) enabled")
 
     if distributed and not fsdp:
         ddp_kwargs = {
-            "device_ids": [device.index],
-            "output_device": device.index,
-            "find_unused_parameters": False,
+            "device_ids": [device.index] if device.type == "cuda" else None,
+            "output_device": device.index if device.type == "cuda" else None,
+            "find_unused_parameters": is_spd,
             "gradient_as_bucket_view": True,
         }
-        if not is_vla:
+        if not is_vla and not is_spd:
             ddp_kwargs.update(static_graph=True, bucket_cap_mb=256)
         model = DDP(model, **ddp_kwargs)
     module = model.module if isinstance(model, DDP) else model
     if hasattr(module, "_orig_mod"):
         module = module._orig_mod
+    # DDP has broadcast rank-zero parameters; initialize EMA from that same state.
+    ema = EMA(module, config.ema_half_life_steps) if is_spd else None
+    if ema is not None and resume_ckpt is not None:
+        ema.load_state_dict(resume_ckpt["ema"])
 
     # Conditioning: DiT uses a CLIP text embedder; VLA feeds raw prompts to Gemma.
     embedder = None
-    if not is_vla:
+    if not is_vla and not is_spd:
         if distributed and rank != 0:
             dist.barrier()
         embedder = CLIPTextEmbedder(config.clip, device="cpu")
         if distributed and rank == 0:
             dist.barrier()
 
-    camera_keys = config.vla_model.camera_keys if is_vla else config.model.camera_keys
+    camera_keys = (
+        config.spd_model.camera_keys if is_spd
+        else config.vla_model.camera_keys if is_vla else config.model.camera_keys
+    )
 
     # Operator prompting (both policies) needs a label-map manifest built a priori.
     operator_label_maps = {}
@@ -404,18 +487,21 @@ def main(config: TrainConfig):
     # VLA lets SigLIP own image normalization (raw [0, 1]); DiT normalizes per backbone.
     norm_preset = None if is_vla else "auto"
     data_model_config = config.vla_model if is_vla else config.model
-    train_loader, train_components = build_train_loader(
-        config, components, norm_stats, data_scope, resume_step,
-        model_config=data_model_config,
-        operator_label_maps=operator_label_maps,
-        norm_preset=norm_preset,
-    )
-    val_loaders, val_components = build_val_loaders(
-        config, components, norm_stats, data_scope,
-        model_config=data_model_config,
-        operator_label_maps=operator_label_maps,
-        norm_preset=norm_preset,
-    )
+    if is_spd:
+        train_loader, val_loaders = spd_data.train_loader, spd_data.val_loaders
+    else:
+        train_loader, train_components = build_train_loader(
+            config, components, norm_stats, data_scope, resume_step,
+            model_config=data_model_config,
+            operator_label_maps=operator_label_maps,
+            norm_preset=norm_preset,
+        )
+        val_loaders, val_components = build_val_loaders(
+            config, components, norm_stats, data_scope,
+            model_config=data_model_config,
+            operator_label_maps=operator_label_maps,
+            norm_preset=norm_preset,
+        )
 
     wandb = None
     if config.log_wandb and rank == 0:
@@ -424,12 +510,26 @@ def main(config: TrainConfig):
 
             wandb = _wandb
             wandb.init(project=config.wandb_project, config=asdict(config))
+            if is_spd:
+                wandb.config.update(asdict(config), allow_val_change=True)
         except Exception as e:  # noqa: BLE001 - optional logging must not stop training
+            if is_spd:
+                raise
             print(f"wandb disabled: {e}")
 
     if data_scope.checkpoint_writer:
         output_dir.mkdir(parents=True, exist_ok=True)
-    if rank == 0:
+    if rank == 0 and is_spd:
+        metadata = {
+            "policy": "spd", "architecture": SPD_ARCHITECTURE,
+            "train_config": asdict(config), "dataset_contract": spd_data.contract,
+            "norm_stats": norm_stats, "dino_sha256": dino_sha256,
+        }
+        (output_dir / "run_metadata.json").write_text(json.dumps(metadata, indent=2))
+        print(f"train[tianji]: {len(spd_data.train_dataset.episodes)} episodes, "
+              f"{len(spd_data.train_dataset)} windows; "
+              f"val: {len(spd_data.val_dataset)} windows; world={world}")
+    elif rank == 0:
         for c, ds in zip(components, train_components):
             prompts = sorted(
                 {p or task_name_to_prompt(t) for *_, t, p in ds.episodes}
@@ -451,6 +551,15 @@ def main(config: TrainConfig):
     }
     if is_vla:
         flow["num_diffusion_draws"] = config.flow.num_diffusion_draws
+    if is_spd:
+        flow = {}
+        if resume_ckpt is not None:
+            states = resume_ckpt["rng_by_rank"]
+            if len(states) != world:
+                raise ValueError("SPD exact RNG resume requires unchanged process world")
+            restore_rng_state(states[rank])
+    # Optimizer/EMA tensors were restored to their owners; release the CPU payload.
+    del resume_ckpt
     model.train()
     global_step = resume_step
     t_last = time.monotonic()
@@ -465,6 +574,8 @@ def main(config: TrainConfig):
         # Free the gradients now rather than after the next forward: 13.7 GiB less live during it.
         optimizer.zero_grad(set_to_none=True)
         scheduler.step()
+        if ema is not None:
+            ema.update(module)
         global_step += 1
 
         if global_step % config.log_every == 0:
@@ -476,7 +587,7 @@ def main(config: TrainConfig):
                 t_last = time.monotonic()
                 sps = config.log_every / dt
                 lr = scheduler.get_last_lr()[0]
-                peak_gib = torch.cuda.max_memory_allocated() / 2**30
+                peak_gib = torch.cuda.max_memory_allocated() / 2**30 if device.type == "cuda" else 0.0
                 print(f"step {global_step:6d}  loss {loss_d.item():.4f}  "
                       f"lr {lr:.2e}  gnorm {grad_norm:.3f}  {sps:.2f} it/s  peak {peak_gib:.1f} GiB")
                 if wandb:
@@ -485,26 +596,50 @@ def main(config: TrainConfig):
                                "steps_per_s": sps}, step=global_step)
 
         if global_step % config.val_every == 0:
-            _run_validation(
-                config, module, val_loaders, device, embedder, camera_keys,
-                distributed, rank, wandb, global_step,
-            )
+            with ema.apply(module) if ema is not None else nullcontext():
+                _run_validation(
+                    config, module, val_loaders, device, embedder, camera_keys,
+                    distributed, rank, wandb, global_step,
+                )
             model.train()
             t_last = time.monotonic()
 
-        if global_step % config.ckpt_every == 0 and (fsdp or data_scope.checkpoint_writer):
+        if global_step % config.ckpt_every == 0 or (is_spd and global_step == config.train_steps):
+            extra_state = None
+            if is_spd:
+                local_rng = capture_rng_state()
+                rank_rng = [None] * world
+                if distributed:
+                    dist.all_gather_object(rank_rng, local_rng)
+                else:
+                    rank_rng[0] = local_rng
+                extra_state = {
+                    "policy": "spd", "architecture": SPD_ARCHITECTURE,
+                    "ema": ema.state_dict(), "dataset_contract": spd_data.contract,
+                    "dino_sha256": dino_sha256, "rng_by_rank": rank_rng,
+                }
             # Gathering sharded state is a collective, so every FSDP rank takes part.
             model_state, optimizer_state = fsdp_state_dicts(model, optimizer) if fsdp else (None, None)
             if data_scope.checkpoint_writer:
-                path = output_dir / f"{global_step}.pt"
-                model_config = asdict(config.vla_model) if is_vla else None
+                path = output_dir / ("last.pt" if config.keep_last_checkpoint_only else f"{global_step}.pt")
+                model_config = asdict(config.spd_model) if is_spd else asdict(config.vla_model) if is_vla else None
+                if is_spd:
+                    model_state = {
+                        name: value for name, value in module.state_dict().items()
+                        if not name.startswith("img_backbone.")
+                    }
                 save_checkpoint(path, module=module, optimizer=optimizer, scheduler=scheduler,
                                 global_step=global_step, norm_stats=norm_stats,
                                 batch_size=config.batch_size, data_world=data_scope.world,
                                 model_config=model_config, train_config=asdict(config),
-                                model_state=model_state, optimizer_state=optimizer_state)
-                update_last(output_dir, path)
+                                model_state=model_state, optimizer_state=optimizer_state,
+                                extra_state=extra_state)
+                if not config.keep_last_checkpoint_only:
+                    update_last(output_dir, path)
                 print(f"[rank {rank}] saved {path}")
+
+    if wandb:
+        wandb.finish()
 
     if distributed:
         dist.destroy_process_group()
@@ -522,16 +657,24 @@ def _run_validation(config, module, val_loaders, device, embedder, camera_keys,
     skipped_val = []
     for name, vl in val_loaders.items():
         err_sum, elem_count, loss_sum, batch_count = 0.0, 0, 0.0, 0
-        for vb in vl:
+        for batch_index, vb in enumerate(vl):
+            if config.policy == "spd" and batch_index >= config.val_batches:
+                break
             vb = batch_to_device(vb, device, embedder, camera_keys)
             with torch.no_grad():
-                pred = module.sample_actions(vb, num_steps=config.flow.num_diffusion_steps)
+                pred = (
+                    module.sample_action_chunks(vb, num_steps=config.flow.num_diffusion_steps)
+                    if config.policy == "spd"
+                    else module.sample_actions(vb, num_steps=config.flow.num_diffusion_steps)
+                )
                 err_sum += F.mse_loss(pred, vb["actions"], reduction="sum").item()
                 elem_count += vb["actions"].numel()
-                loss_sum += module(
-                    vb, max_action_prefix=0, prefix_conditioning_prob=0.0
-                ).item()
-                batch_count += 1
+                loss_weight = vb["actions"].shape[0] if config.policy == "spd" else 1
+                loss_sum += (
+                    module(vb) if config.policy == "spd" else
+                    module(vb, max_action_prefix=0, prefix_conditioning_prob=0.0)
+                ).item() * loss_weight
+                batch_count += loss_weight
         stats = torch.tensor(
             [err_sum, float(elem_count), loss_sum, float(batch_count)], device=device
         )

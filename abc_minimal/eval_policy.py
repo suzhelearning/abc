@@ -1,7 +1,7 @@
-"""Run MuJoCo-Warp sim eval for ABC-DiT checkpoints.
+"""Run ABC YAM or Tianji/Wuji2 policy simulation evaluation.
 
 Builds the scene, executes policy rollouts, and writes JSON/video outputs.
-Every task runs through the abc_sim catalogue via abc_minimal/sim_env.py.
+YAM tasks use the abc_sim catalogue; Tianji uses its explicit 54-DoF adapter.
 """
 
 from __future__ import annotations
@@ -18,12 +18,15 @@ import torch
 
 from abc_minimal.config import (
     SimEvalConfig,
+    SPDConfig,
     validate_model_config,
     validate_vla_model_config,
 )
 from abc_minimal.policy import (
     DiTInferencePolicy,
     VLAInferencePolicy,
+    SPDInferencePolicy,
+    SPDPolicyConfig,
 )
 from abc_minimal.policy import DiTInferencePolicy as SimPolicy
 from abc_sim.randomization.core import RandomizationSamplingError
@@ -31,6 +34,7 @@ from deploy.policy.selector import sniff_policy_kind
 
 if TYPE_CHECKING:
     from abc_minimal.sim_env import SimTaskEnv
+    from abc_sim.tianji_env import TianjiTaskEnv
 
 torch.set_float32_matmul_precision("high")
 
@@ -371,8 +375,24 @@ def resolve_output_dir(config: SimEvalConfig) -> str:
     return str(ROOT / "outputs" / f"sim_eval_{config.task}")
 
 
-def _make_env(config: SimEvalConfig, camera_keys: tuple[str, ...]) -> SimTaskEnv:
+def _make_env(config: SimEvalConfig, camera_keys: tuple[str, ...]) -> SimTaskEnv | TianjiTaskEnv:
     """Build the rollout env for the configured task (abc_sim catalogue)."""
+    if config.embodiment == "tianji_wuji2":
+        from abc_sim.tianji_env import TianjiTaskEnv
+
+        initial = None
+        if config.tianji.initial_qpos_path:
+            initial = json.loads(Path(config.tianji.initial_qpos_path).expanduser().read_text())
+            if isinstance(initial, dict):
+                initial = initial["qpos"]
+        return TianjiTaskEnv(
+            model_path=config.tianji.model_path, urdf_path=config.tianji.urdf_path,
+            height=config.camera_height, width=config.camera_width,
+            camera_keys=camera_keys, active_cameras=config.tianji.active_cameras,
+            initial_qpos=initial, object_body=config.tianji.object_body,
+            lift_height=config.tianji.lift_height, hold_steps=config.tianji.hold_steps,
+            image_stride=8, control_hz=30,
+        )
     from abc_minimal.sim_env import SimTaskEnv
 
     return SimTaskEnv(
@@ -446,6 +466,16 @@ def build_summary(
         "worlds": worlds,
     }
     summary["task"] = config.task
+    summary["embodiment"] = config.embodiment
+    if config.embodiment == "tianji_wuji2":
+        summary["evaluation_definition"] = {
+            "task": "tianji_pick_hammer",
+            "success": "object raised by lift_height with sustained hand contact",
+            "lift_height_m": config.tianji.lift_height,
+            "hold_control_steps": config.tianji.hold_steps,
+            "active_policy_cameras": list(config.tianji.active_cameras),
+            "scope": "simulation result only; not real-robot task qualification",
+        }
     if physics is not None:
         summary["resolved_physics"] = physics
     if has_max_reward:
@@ -480,6 +510,51 @@ def build_summary(
     return summary
 
 
+def _spd_eval_config(config, checkpoint_path):
+    """Resolve SPD from its own checkpoint, never from a YAM 14-D config."""
+    from abc_minimal.spd import validate_spd_config
+
+    checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False, mmap=True)
+    if checkpoint.get("policy") != "spd" or "model_config" not in checkpoint:
+        raise ValueError("SPD evaluation requires an ABC SPD checkpoint; migrate old weights explicitly")
+    model_config = SPDConfig(**checkpoint["model_config"])
+    errors = validate_spd_config(model_config)
+    if model_config.image_stride != 8:
+        errors.append("Tianji simulation observation cadence requires image_stride=8")
+    if config.embodiment != "tianji_wuji2" or config.task != "tianji_pick_hammer":
+        errors.append("SPD simulation requires --embodiment tianji_wuji2 --task tianji_pick_hammer")
+    if config.rtc or config.fast_inference or config.parallel_worlds:
+        errors.append("SPD simulation requires --no-rtc --no-fast-inference and sequential worlds")
+    if config.prefix_length not in (None, 0):
+        errors.append("SPD uses an observation cache, not an action prefix")
+    if config.camera_backend != "mujoco":
+        errors.append("Tianji currently requires --camera-backend mujoco")
+    if not 1 <= config.execute_chunk_dim <= model_config.chunk_length:
+        errors.append(f"execute_chunk_dim must be in [1,{model_config.chunk_length}] for this SPD checkpoint")
+    if min(config.num_worlds, config.num_chunks, config.camera_height, config.camera_width,
+           config.diffusion_steps, config.video_fps, config.video_every_n_actions) <= 0:
+        errors.append("world/chunk/image/diffusion/video dimensions must be positive")
+    for name, path in (
+        ("tianji.model_path", config.tianji.model_path),
+        ("tianji.urdf_path", config.tianji.urdf_path),
+        ("spd_dino_checkpoint", config.spd_dino_checkpoint),
+    ):
+        if not path or not Path(path).expanduser().is_file():
+            errors.append(f"{name} must name an existing file")
+    if config.tianji.initial_qpos_path and not Path(config.tianji.initial_qpos_path).expanduser().is_file():
+        errors.append("tianji.initial_qpos_path does not exist")
+    trained_cameras = checkpoint.get("source_camera_keys")
+    if trained_cameras is None:
+        trained_cameras = checkpoint.get("dataset_contract", {}).get("train", {}).get("config", {}).get("camera_names")
+    if not trained_cameras:
+        errors.append("checkpoint lacks recorded-camera provenance")
+    elif not set(config.tianji.active_cameras).issubset(trained_cameras):
+        errors.append("active simulation cameras include a view absent from checkpoint training")
+    if errors:
+        raise ValueError("Invalid SPD sim eval config:\\n  - " + "\\n  - ".join(errors))
+    return model_config
+
+
 def run_eval(config: SimEvalConfig) -> dict[str, Any]:
     ckpt_path = Path(config.checkpoint).expanduser().resolve()
     policy_kind = (
@@ -487,43 +562,61 @@ def run_eval(config: SimEvalConfig) -> dict[str, Any]:
         if config.policy == "auto"
         else config.policy
     )
-    model_config = config.vla_model if policy_kind == "vla" else config.model
-    model_errors = (
-        validate_vla_model_config(config.vla_model)
-        if policy_kind == "vla"
-        else validate_model_config(config.model)
-    )
+    is_spd = policy_kind == "spd"
+    if is_spd:
+        model_config = _spd_eval_config(config, ckpt_path)
+        model_errors = []
+    else:
+        if config.embodiment != "yam":
+            raise ValueError("Tianji simulation requires a 54-D SPD checkpoint, not a YAM DiT/VLA policy")
+        model_config = config.vla_model if policy_kind == "vla" else config.model
+        model_errors = (
+            validate_vla_model_config(config.vla_model)
+            if policy_kind == "vla" else validate_model_config(config.model)
+        )
     config_errors = (
         model_errors + validate_rtc_config(config) + validate_batched_config(config)
     )
     if config_errors:
         raise ValueError("Invalid sim eval config:\n  - " + "\n  - ".join(config_errors))
 
-    require_mjwarp()
+    if not is_spd:
+        require_mjwarp()
     options = reset_options(config)
     config = replace(
         config,
         policy=policy_kind,
-        prompt=resolve_prompt(config),
+        prompt="" if is_spd else resolve_prompt(config),
         output_dir=resolve_output_dir(config),
     )
     device = resolve_device(config.device, config.gpu_id)
-    policy_cls = VLAInferencePolicy if policy_kind == "vla" else DiTInferencePolicy
-    policy = policy_cls(ckpt_path, config, device, model_config=model_config)
-    prefix_length = resolve_prefix_length(
-        config, policy.trained_max_prefix, model_config
-    )
-    config = replace(config, prefix_length=prefix_length)
-    prefix_text = (
-        f"conditioning on the last {prefix_length} executed actions"
-        if prefix_length
-        else "unprefixed (off-distribution for prefix-trained checkpoints)"
-    )
-    print(
-        f"prefix conditioning: {prefix_text} "
-        f"(checkpoint max_action_prefix={policy.trained_max_prefix})",
-        flush=True,
-    )
+    if is_spd:
+        # Keep the folded checkpoint's FP32 expert arithmetic at reference precision.
+        torch.set_float32_matmul_precision("highest")
+        policy = SPDInferencePolicy(
+            ckpt_path,
+            SPDPolicyConfig(
+                model=model_config, dino_checkpoint=config.spd_dino_checkpoint,
+                diffusion_steps=config.diffusion_steps, norm_stats_path=config.norm_stats_path,
+            ),
+            device,
+        )
+        prefix_length = 0
+        config = replace(config, prefix_length=0)
+        print(f"SPD rolling history: observe every 30Hz tick; cached {model_config.chunk_length}-action sampling", flush=True)
+    else:
+        policy_cls = VLAInferencePolicy if policy_kind == "vla" else DiTInferencePolicy
+        policy = policy_cls(ckpt_path, config, device, model_config=model_config)
+        prefix_length = resolve_prefix_length(config, policy.trained_max_prefix, model_config)
+        config = replace(config, prefix_length=prefix_length)
+        prefix_text = (
+            f"conditioning on the last {prefix_length} executed actions"
+            if prefix_length else "unprefixed (off-distribution for prefix-trained checkpoints)"
+        )
+        print(
+            f"prefix conditioning: {prefix_text} "
+            f"(checkpoint max_action_prefix={policy.trained_max_prefix})", flush=True,
+        )
     out_dir = Path(config.output_dir).expanduser().resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
     if config.parallel_worlds:
@@ -555,8 +648,8 @@ def run_eval(config: SimEvalConfig) -> dict[str, Any]:
 
 def rollout_worlds(
     config: SimEvalConfig,
-    policy: SimPolicy,
-    env: SimTaskEnv,
+    policy: DiTInferencePolicy | VLAInferencePolicy | SPDInferencePolicy,
+    env: SimTaskEnv | TianjiTaskEnv,
     prefix_length: int,
     options: dict[str, Any] | None,
     out_dir: Path,
@@ -564,6 +657,7 @@ def rollout_worlds(
 ) -> list[dict[str, Any]]:
     """Roll out the worlds one at a time in CPU MuJoCo; returns their records."""
     rng = np.random.default_rng(config.policy_seed)
+    stateful_spd = config.policy == "spd"
     worlds = []
     fast_inference_ready = False
     rtc_warmup_ready = False
@@ -578,6 +672,8 @@ def rollout_worlds(
             video_path = None
             t0 = time.perf_counter()
             seed = int(config.seed + world_index)
+            if stateful_spd:
+                policy.reset()
             try:
                 obs = env.reset(seed=seed, options=options)
             except RandomizationSamplingError:
@@ -625,7 +721,8 @@ def rollout_worlds(
 
                 video_path = out_dir / f"world_{world_index:03d}.mp4"
                 video = imageio.get_writer(str(video_path), fps=config.video_fps, macro_block_size=1)
-                video.append_data(video_frame(obs["images"], model_config.camera_keys))
+                initial_images = env.render_cameras() if stateful_spd else obs["images"]
+                video.append_data(video_frame(initial_images, model_config.camera_keys))
             final_eval = env.evaluate_vanilla() if config.vanilla_physics else env.evaluate()
             # Best instantaneous progress fraction over the episode; the
             # production dishrack eval aggregated this, not the final state.
@@ -703,6 +800,9 @@ def rollout_worlds(
                             rtc.start(next_obs, actions, next_noise)
                             rtc_started = True
                         step_fn(action)
+                        if stateful_spd:
+                            tick_obs = obs_fn()
+                            policy.observe(tick_obs, step=tick_obs["step"])
                         final_eval = eval_fn()
                         max_reward = max(max_reward, float(final_eval.get("reward", 0.0)))
                         steps += 1
@@ -715,7 +815,7 @@ def rollout_worlds(
                         break
                     if rtc is None and chunk + 1 < config.num_chunks:
                         t_obs = time.perf_counter()
-                        obs = obs_fn()
+                        obs = None if stateful_spd else obs_fn()
                         rtc_obs_s = time.perf_counter() - t_obs
                         if prefix_length:
                             action_prefix = np.asarray(

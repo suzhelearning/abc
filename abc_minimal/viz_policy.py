@@ -177,6 +177,8 @@ def run_sim_task_viewer(cfg: VizPolicyConfig) -> None:
     policy_kind = (
         sniff_policy_kind(str(checkpoint)) if sim.policy == "auto" else sim.policy
     )
+    if policy_kind == "spd" or sim.embodiment == "tianji_wuji2":
+        raise ValueError("Use eval_policy.py --embodiment tianji_wuji2 --save-video for Tianji SPD simulation; this interactive viewer is YAM-only")
     model_config = sim.vla_model if policy_kind == "vla" else sim.model
     device = resolve_device(sim.device)
     model_errors = (

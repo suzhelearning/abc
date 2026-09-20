@@ -21,6 +21,15 @@ deployment, and data conversion utilities. Use `prepare.py --sim-data-list`
 to see the currently published simulation datasets and
 `prepare.py --sim-bundle-list` to browse available evaluation bundles.
 
+The `abc-spd` branch additionally integrates a **Tianji/Wuji2 54-DoF SPD policy**
+through the existing `train.py --policy spd` entry point, based on upstream
+`cd4ca33`. See [SPD training and inference](abc_minimal/README.md#tianjiwuji2-spd)
+for the real-recording contract, paper recipe, missing-camera masks, and
+architecture assumptions. The branch also supports
+[Tianji CPU-MuJoCo simulation rollouts](abc_minimal/README.md#tianji-simulation-rollout)
+with trained SPD weights. It does not include an author-released SPD checkpoint
+or a qualified Tianji hardware-control adapter.
+
 ## Repo layout
 
 This README covers setup, a short evaluation smoke test, and training. The package READMEs below hold the full reference for their areas.

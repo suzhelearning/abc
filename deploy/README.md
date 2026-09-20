@@ -6,6 +6,11 @@ teleoperation, and replay-based testing. Both the ABC-DiT and the Gemma/SigLIP
 VLA policies are servable; the server auto-detects which one a checkpoint is
 (see [VLA inference](#vla-inference)).
 
+Tianji/Wuji2 SPD checkpoints are recognized but rejected by these YAM hardware
+entry points before robot launch. Their supported path is currently
+[Tianji simulation inference](../abc_minimal/README.md#tianji-simulation-rollout),
+not this hardware controller or websocket server.
+
 Install the hardware/runtime dependencies on the robot workstation:
 
 ```bash

@@ -28,6 +28,8 @@ class OptimConfig:
     vision_lr_scale: float = 1.0
     # VLA policy only: LR multiplier for the Gemma/SigLIP backbone param group.
     backbone_lr_scale: float = 1.0
+    # SPD policy: Muon for matrices, AdamW for remaining trainable tensors.
+    muon_momentum: float = 0.95
 
 
 @dataclass
@@ -119,6 +121,40 @@ class DiTConfig:
     vision_pool_mlp_ratio: int = 4
 
 
+@dataclass
+class SPDConfig:
+    """SPD paper dimensions, adapted from 56 to Tianji/Wuji2's 54 joints."""
+    hidden_size: int = 768
+    depth: int = 8
+    num_heads: int = 12
+    mlp_ratio: float = 4.0
+    state_dim: int = 54
+    action_dim: int = 54
+    history_steps: int = 256
+    chunk_length: int = 8
+    image_stride: int = 8
+    attention_window_steps: int = 32
+    camera_keys: tuple[str, ...] = ("top", "left_wrist", "right_wrist")
+    vit_embed_dim: int = 768
+    vit_depth: int = 12
+    vit_num_heads: int = 12
+    vision_pool_num_queries: int = 4
+    vision_pool_num_heads: int = 8
+    vision_pool_mlp_ratio: int = 4
+    dino_frame_batch_size: int = 4
+    observation_noise_std: float = 0.03
+    action_noise_std: float = 0.03
+
+
+@dataclass
+class SPDDataConfig:
+    """Real collector input; source data is never rewritten."""
+    root: str = ""
+    dino_checkpoint: str = ""
+    joint_max_age_ms: float = 150.0
+    image_max_age_ms: float = 2000.0
+
+
 MIXTURE_PRESETS: dict[str, list[MixtureComponent]] = {
     "bottles": [
         MixtureComponent("train_real", "val_real", 0.8172, "throw_plastic_bottles_in_bin"),
@@ -140,18 +176,20 @@ MIXTURE_PRESETS: dict[str, list[MixtureComponent]] = {
 
 @dataclass
 class TrainConfig:
-    """Minimal ABC training: the CLIP/DINOv3 ABC-DiT policy (default) or the
-    ABC-VLA, selected with ``--policy {dit,vla}``. Both share this
-    single entry point (``train.py``), training loop, optimizer/scheduler,
-    validation, and checkpoint format; ``--policy vla`` swaps in the Gemma
-    backbone (``--vla-model.*``) and enables the VLA-only optim/flow knobs."""
-    policy: Literal["dit", "vla"] = "dit"
+    """ABC-DiT, ABC-VLA, or Tianji SPD through ``train.py --policy {dit,vla,spd}``.
+
+    Policies share the loop, sampler and checkpoint format. ``vla_model`` selects
+    Gemma/SigLIP; ``spd_model`` and ``spd_data`` select history-based, language-free
+    SPD. SPD uses Muon/AdamW and EMA; its paper recipe sets the common optim flags
+    to learning_rate=1e-3, weight_decay=0.1, lr_warmup_steps=0.
+    """
+    policy: Literal["dit", "vla", "spd"] = "dit"
 
     cache_root: str = field(
         default_factory=lambda: str(default_cache_root())
     )
     # Where checkpoints are written. Defaults per policy when unset:
-    # dit -> cache/finetune_checkpoints, vla -> cache/vla_checkpoints.
+    # dit -> finetune_checkpoints, vla -> vla_checkpoints, spd -> spd_checkpoints.
     output_dir: str | None = None
     seed: int = 123
     batch_size: int = 90
@@ -183,6 +221,8 @@ class TrainConfig:
     val_batches: int = 4
     ckpt_every: int = 5000
     log_wandb: bool = False
+    keep_last_checkpoint_only: bool = False
+    ema_half_life_steps: float = 20.0
     wandb_project: str = "minimal-abc"
 
     optim: OptimConfig = field(default_factory=OptimConfig)
@@ -193,6 +233,8 @@ class TrainConfig:
     model: DiTConfig = field(default_factory=DiTConfig)
     # VLA policy architecture (used when policy="vla").
     vla_model: "VLAModelConfig" = field(default_factory=lambda: VLAModelConfig())
+    spd_model: SPDConfig = field(default_factory=SPDConfig)
+    spd_data: SPDDataConfig = field(default_factory=SPDDataConfig)
 
     def resolve_mixture(self) -> list[MixtureComponent]:
         return self.mixture if self.mixture else MIXTURE_PRESETS[self.mixture_preset]
@@ -255,12 +297,27 @@ class VLAModelConfig:
 
 
 @dataclass
+class TianjiSimConfig:
+    """External, calibrated Tianji/Wuji2 MJCF and matching URDF assets."""
+    model_path: str = ""
+    urdf_path: str = ""
+    initial_qpos_path: str | None = None
+    active_cameras: tuple[str, ...] = ("top", "left_wrist")
+    object_body: str = "hammer"
+    lift_height: float = 0.05
+    hold_steps: int = 6
+
+
+@dataclass
 class SimEvalConfig:
-    """MuJoCo-Warp sim evaluation, defaulting to the put-bottles task."""
+    """ABC simulation evaluation: YAM catalogue or explicit Tianji/Wuji2 scene."""
     checkpoint: str
-    # "auto" identifies DiT vs VLA from checkpoint tensor keys.
-    policy: Literal["auto", "dit", "vla"] = "auto"
+    # "auto" identifies DiT/VLA weights or versioned SPD checkpoint metadata.
+    policy: Literal["auto", "dit", "vla", "spd"] = "auto"
     task: str = "put_plastic_bottles_in_bin"  # any abc_sim task name, alias, or prompt
+    embodiment: Literal["yam", "tianji_wuji2"] = "yam"
+    tianji: TianjiSimConfig = field(default_factory=TianjiSimConfig)
+    spd_dino_checkpoint: str = ""
     norm_stats_path: str | None = None
     output_dir: str | None = None  # None resolves to $REPO/outputs/sim_eval_<task>.
     num_worlds: int = 5
@@ -362,7 +419,8 @@ def validate_model_config(model: DiTConfig) -> list[str]:
 def validate_train_config(
     config: TrainConfig, cache_root: Path, checkpoint_path: Path
 ) -> list[MixtureComponent]:
-    components = config.resolve_mixture()
+    is_spd = config.policy == "spd"
+    components = [] if is_spd else config.resolve_mixture()
     weights = [c.weight for c in components]
     errors = []
 
@@ -390,7 +448,34 @@ def validate_train_config(
         errors.append(
             "flow probabilities must be in [0, 1] and prefix_noise_scale must be non-negative"
         )
-    if config.policy == "vla":
+    if is_spd:
+        from abc_minimal.spd import validate_spd_config
+
+        errors.extend(validate_spd_config(config.spd_model))
+        if (config.spd_model.history_steps, config.spd_model.image_stride, config.spd_model.chunk_length) != (256, 8, 8):
+            errors.append("Tianji SPD data requires history_steps=256, image_stride=8, chunk_length=8")
+        if config.compile_siglip or config.prompt.use_operator_id_as_prompt:
+            errors.append("SPD has no SigLIP or language/operator conditioning")
+        if config.flow.max_action_prefix or config.flow.mask_state_ratio or config.flow.prefix_noise_scale:
+            errors.append("SPD requires --flow.max-action-prefix 0 --flow.mask-state-ratio 0 and no prefix noise")
+        if config.flow.num_diffusion_draws != 1:
+            errors.append("SPD already draws independent flow times per chunk; num_diffusion_draws must be 1")
+        if config.resume_from and not config.inherit_ckpt_norm_stats:
+            errors.append("SPD resume requires the checkpoint's normalization")
+        if not config.spd_data.root or not config.spd_data.dino_checkpoint:
+            errors.append("SPD requires --spd-data.root and --spd-data.dino-checkpoint")
+        for name, value in (
+            ("learning_rate", config.optim.learning_rate),
+            ("max_grad_norm", config.optim.max_grad_norm),
+            ("ema_half_life_steps", config.ema_half_life_steps),
+            ("joint_max_age_ms", config.spd_data.joint_max_age_ms),
+            ("image_max_age_ms", config.spd_data.image_max_age_ms),
+        ):
+            if not math.isfinite(value) or value <= 0:
+                errors.append(f"{name} must be finite and positive")
+        if config.optim.lr_warmup_steps < 0 or not 0 <= config.optim.muon_momentum < 1:
+            errors.append("SPD warmup must be nonnegative and Muon momentum in [0,1)")
+    elif config.policy == "vla":
         errors.extend(validate_vla_model_config(config.vla_model))
     else:
         errors.extend(validate_model_config(config.model))
@@ -409,7 +494,7 @@ def validate_train_config(
             "operator prompting requires --prompt.operator-label-map-path; build the "
             "manifest a priori with scripts/build_operator_label_map.py"
         )
-    if (
+    if not is_spd and (
         not components
         or any(not math.isfinite(w) or w <= 0 for w in weights)
         or not math.isclose(sum(weights), 1.0, rel_tol=0.0, abs_tol=1e-6)
@@ -419,14 +504,20 @@ def validate_train_config(
             f"got {sum(weights) if weights else 0:.8g}"
         )
 
-    required = [cache_root / p for c in components for p in (c.train_dir, c.val_dir)]
+    if is_spd:
+        required = [
+            Path(config.spd_data.root).expanduser() / "dataset_config.json",
+            Path(config.spd_data.dino_checkpoint).expanduser(),
+        ]
+    else:
+        required = [cache_root / p for c in components for p in (c.train_dir, c.val_dir)]
     if config.load_pretrained:
         required.append(checkpoint_path)
     if config.prompt.use_operator_id_as_prompt and config.prompt.operator_label_map_path:
         required.append(Path(config.prompt.operator_label_map_path).expanduser())
     # norm_stats.json is only required when we are NOT inheriting stats embedded
     # in a checkpoint (pretrained parent or resume checkpoint; see train_loop.main)
-    if not (config.inherit_ckpt_norm_stats and (config.load_pretrained or config.resume_from)):
+    if not is_spd and not (config.inherit_ckpt_norm_stats and (config.load_pretrained or config.resume_from)):
         required.append(cache_root / "norm_stats.json")
     if config.resume_from:
         required.append(Path(config.resume_from).expanduser())

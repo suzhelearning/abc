@@ -7,10 +7,12 @@ step ``step`` or ``training_step``; readers tolerate both.
 """
 
 import os
+import random
 import shutil
 from collections.abc import Mapping
 from pathlib import Path
 
+import numpy as np
 import torch
 
 
@@ -117,7 +119,8 @@ def restore_training_state(ckpt, *, optimizer, scheduler, resume_step, rank, sou
 
 def save_checkpoint(path, *, module, optimizer, scheduler, global_step, norm_stats,
                     batch_size=None, data_world=None, model_config=None,
-                    train_config=None, model_state=None, optimizer_state=None) -> None:
+                    train_config=None, model_state=None, optimizer_state=None,
+                    extra_state=None) -> None:
     """Write the checkpoint via tmp file + rename so a crash mid-write can
     never leave a truncated file where resume looks. ``model_state`` and
     ``optimizer_state`` carry the gathered dicts of an FSDP run."""
@@ -138,6 +141,11 @@ def save_checkpoint(path, *, module, optimizer, scheduler, global_step, norm_sta
         # Plain dict so eval-side readers (resolve_trained_max_prefix) need
         # no import of this repo's dataclasses to interpret it.
         payload["train_config"] = train_config
+    if extra_state is not None:
+        overlap = payload.keys() & extra_state.keys()
+        if overlap:
+            raise ValueError(f"extra checkpoint state overwrites core keys: {sorted(overlap)}")
+        payload.update(extra_state)
     tmp = path.with_name(path.name + ".tmp")
     torch.save(payload, tmp)
     tmp.replace(path)
@@ -153,3 +161,23 @@ def update_last(output_dir: Path, path: Path) -> None:
     except OSError:
         shutil.copyfile(path, tmp)
     tmp.replace(output_dir / "last.pt")
+
+
+def capture_rng_state():
+    """Capture rank-local flow-noise streams for exact SPD resume."""
+    return {
+        "torch": torch.get_rng_state(),
+        "numpy": np.random.get_state(),
+        "python": random.getstate(),
+        "cuda": torch.cuda.get_rng_state() if torch.cuda.is_available() else None,
+    }
+
+
+def restore_rng_state(state):
+    torch.set_rng_state(state["torch"].cpu())
+    np.random.set_state(state["numpy"])
+    random.setstate(state["python"])
+    if state["cuda"] is not None:
+        if not torch.cuda.is_available():
+            raise ValueError("GPU RNG state cannot be resumed exactly on CPU")
+        torch.cuda.set_rng_state(state["cuda"].cpu())

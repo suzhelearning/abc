@@ -25,6 +25,7 @@ task randomization, and new sim environments all work from this package alone.
 - [Rendering](#rendering)
 - [Adding a New Env or Task](#adding-a-new-env-or-task)
 - [RL Usage](#rl-usage)
+- [Tianji/Wuji2 embodiment](#tianjiwuji2-embodiment)
 
 ## Quickstart
 
@@ -644,3 +645,29 @@ env.close()
 Use `info["task_success"]` and `info["task_eval"]` for success-conditioned
 metrics, curricula, or offline analysis. Use `reset_info["randomization"]` to
 record and replay fixed worlds across policies.
+
+## Tianji/Wuji2 embodiment
+
+`tianji_env.py` implements the ABC sim-evaluation environment surface for a
+54-DoF Tianji/Wuji2 model: `reset`, `obs`, `step_one`, `evaluate`,
+`render_cameras`, and `close`. It reuses the live MuJoCo camera provider and
+the main `eval_policy.py` rollout loop. The YAM Gym/catalogue defaults are
+unchanged; select `--embodiment tianji_wuji2 --task tianji_pick_hammer` explicitly.
+
+The model/URDF are external assets. Canonical limited hinge joints and their
+position actuators are resolved by name, independently of object free-joint
+addresses. Controls are radians with URDF target limits/rate bounds; feedback
+is measured qpos and previous measured qpos. CPU physics is stepped at the
+source timestep, with an integer decimation to 30 Hz. Invalid physics aborts
+rather than silently resetting or replaying target poses.
+
+All three camera names exist, but a separate validity mask excludes untrained
+views from the policy. Images are delivered to SPD every eight ticks while
+proprioceptive history is updated at every tick. All three views can still be
+included in the video. Episode reset clears both simulation and policy history.
+
+The hammer evaluator measures sustained hand contact and height gain, with
+tick-based hold counting independent of evaluation-call frequency. Its fixture
+geometry and goal thresholds are explicit, not the unchanged YAM benchmark.
+See [the complete scene, checkpoint conversion and rollout workflow](../abc_minimal/README.md#tianji-simulation-rollout)
+for commands, calibration limitations and observed results.

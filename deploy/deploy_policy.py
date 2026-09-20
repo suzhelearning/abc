@@ -170,6 +170,8 @@ def _resolve_policy(cfg: DeployConfig) -> None:
     """Detect the checkpoint kind here so the server and the recorder label agree."""
     if cfg.policy_type == "auto" and Path(cfg.checkpoint_path).expanduser().is_file():
         cfg.policy_type = sniff_policy_kind(cfg.checkpoint_path)
+    if cfg.policy_type == "spd":
+        raise ValueError("Tianji SPD checkpoints are simulation-only here; do not launch the YAM hardware controller")
     cfg.model_size = cfg.model_size or MODEL_SIZES.get(cfg.policy_type, "")
 
 

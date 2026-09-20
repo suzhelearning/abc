@@ -18,6 +18,8 @@ def create_policy(args: Args):
     kind = args.policy_type
     if kind == "auto":
         kind = sniff_policy_kind(args.policy.checkpoint_path)
+    if kind == "spd":
+        raise ValueError("SPD is supported by Tianji simulation eval_policy.py, not the YAM hardware server")
     if kind == "vla":
         return VLAPolicy(args.vla_config())
     return Policy(args.dit_config())

@@ -14,7 +14,7 @@ import torch
 
 from abc_minimal.checkpointing import model_state_dict
 
-PolicyKind = Literal["dit", "vla"]
+PolicyKind = Literal["dit", "vla", "spd"]
 
 _VLA_MARKERS = ("vla.", "obs_pool.", "diffusion_head.")
 _DIT_MARKERS = ("x_embedder", "pos_embed", "y_embedder")
@@ -27,6 +27,14 @@ def sniff_policy_kind(checkpoint_path: str) -> PolicyKind:
         weights_only=False,
         mmap=True,
     )
+    if ckpt.get("architecture") == "spd-paired-kv-v2":
+        raise ValueError("legacy SPD weights require scripts/convert_spd_checkpoint.py before ABC inference")
+    if ckpt.get("policy") == "spd":
+        from abc_minimal.spd import SPD_ARCHITECTURE
+
+        if ckpt.get("architecture") != SPD_ARCHITECTURE:
+            raise ValueError("unsupported SPD checkpoint architecture")
+        return "spd"
     state = model_state_dict(ckpt)
     keys = list(state.keys())
     if any(k.startswith(_VLA_MARKERS) for k in keys):

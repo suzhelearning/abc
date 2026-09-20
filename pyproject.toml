@@ -30,6 +30,10 @@ dependencies = [
     "mcap",
     "mcap-protobuf-support",
     "wandb",
+    # SPD Tianji HDF5 recordings and official DINOv3 HF weights.
+    "h5py",
+    "Pillow",
+    "safetensors>=0.4.3",
 ]
 
 [project.optional-dependencies]
@@ -37,7 +41,6 @@ deploy = [
     "dynamixel-sdk",
     "evdev; sys_platform == 'linux'",
     "gymnasium>=1.1",
-    "h5py",
     # note that this version carries correct gains for xdof data! the defaults in i2rt are wrong.
     "i2rt @ git+https://github.com/arthurallshire/i2rt-drivers.git@852f6fff33970fe9b882c53e6b28c66172c97291",
     "msgpack",
@@ -47,7 +50,7 @@ deploy = [
     "pyzmq",
     "websockets",
 ]
-dev = ["ruff"]
+dev = ["ruff", "pytest"]
 
 [tool.uv]
 override-dependencies = [
