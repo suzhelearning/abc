@@ -52,7 +52,6 @@ from abc_minimal.dit import (
     DiTPolicy,
     load_clip_vision_weights,
     load_pretrained,
-    task_name_to_prompt,
 )
 from abc_minimal.operator import load_operator_label_maps
 from abc_minimal.preprocess import load_norm_stats, parse_norm_stats
@@ -532,7 +531,7 @@ def main(config: TrainConfig):
     elif rank == 0:
         for c, ds in zip(components, train_components):
             prompts = sorted(
-                {p or task_name_to_prompt(t) for *_, t, p in ds.episodes}
+                {prompt for *_, timeline in ds.episodes for _, prompt in timeline}
             )
             shown = prompts if len(prompts) <= 5 else [*prompts[:5], f"... {len(prompts) - 5} more"]
             print(f"train[{c.train_dir}] weight={c.weight:.4f}: "
