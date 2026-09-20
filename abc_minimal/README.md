@@ -20,8 +20,9 @@ the episode/policy visualizers. The scripts at the repository root —
 `train.py`, `eval_policy.py`, `viz_episode.py`, `viz_policy.py` — are thin
 wrappers around this package.
 
-Setup, the data download, single-node training, and the evaluation quickstart
-are covered in the [top-level README](../README.md). Simulator environments and
+The [top-level README](../README.md) covers Tianji/Wuji2 SPD setup, data,
+training and simulation. For the original ABC-DiT/VLA quickstart, see the
+[upstream README](https://github.com/amazon-far/abc). Simulator environments and
 the sim-eval task catalogue are covered in the
 [abc_sim README](../abc_sim/README.md). This document is the training-side
 reference: multi-node jobs, the episode data format and converters, and prompt

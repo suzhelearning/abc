@@ -1,310 +1,408 @@
-# **Scalable Behavior Cloning with Open Data, Training, and Evaluation**
+# ABC-SPD：Tianji / Wuji2 双臂灵巧手策略
 
-<p align="center">
-  <strong>
-    <a href="https://abc.bot">Project Website</a> |
-    <a href="https://abc.bot/abc.pdf">Paper</a> |
-    <a href="https://huggingface.co/datasets/XDOF/ABC-130k">Raw Data</a>
-  </strong>
-</p>
+本项目基于 [ABC](https://github.com/amazon-far/abc)，面向 **Tianji 双臂 + Wuji2 双灵巧手的 54 自由度机器人**，
+提供真实示范数据加载、SPD 策略训练、有状态推理和 MuJoCo 闭环仿真。
+SPD 接入现有 `train.py --policy spd`，不依赖旧版 `spd_vr` 包，也不使用独立的 `train_spd.py`。
 
-![](assets/teaser.jpg)
+**当前边界：训练、推理和仿真链路已接通，但尚未证明抓锤任务成功；没有经过验证的 Tianji 真机控制适配器。**
+本仓库不附带 SPD 作者发布的 checkpoint、Tianji 示范数据或完整机器人/扫描资产。
 
+## 目录
 
-Code for the ABC project.
+- [项目结构](#项目结构)
+- [SPD 模型与数据流](#spd-模型与数据流)
+- [环境安装](#环境安装)
+- [数据与权重准备](#数据与权重准备)
+- [训练与续训](#训练与续训)
+- [策略推理接口](#策略推理接口)
+- [Tianji 仿真使用](#tianji-仿真使用)
+- [验证与已知限制](#验证与已知限制)
+- [常见问题](#常见问题)
+- [上游 ABC 功能](#上游-abc-功能)
+- [许可与引用](#licenses)
 
-## Release status
+## 项目结构
 
-This release includes ABC-DiT and ABC-VLA training, pretrained and
-task-finetuned checkpoints, simulation and evaluation tools, real-robot
-deployment, and data conversion utilities. Use `prepare.py --sim-data-list`
-to see the currently published simulation datasets and
-`prepare.py --sim-bundle-list` to browse available evaluation bundles.
+```text
+abc-spd/
+├── train.py                       # 共用训练入口，SPD 必须指定 --policy spd
+├── eval_policy.py                 # 离线闭环仿真、视频和评估报告
+├── pyproject.toml                 # Python 依赖与 uv 索引配置
+├── abc_minimal/
+│   ├── config.py                  # SPD 模型、数据、训练及仿真配置
+│   ├── spd.py                     # 观测/动作专家、时序注意力、缓存与采样
+│   ├── tianji_data.py             # Tianji HDF5 读取、对齐、切窗与归一化
+│   ├── dino_weights.py            # 官方 DINOv3 权重加载与格式映射
+│   ├── spd_optim.py               # Muon/AdamW 适配与 EMA
+│   ├── train_loop.py              # 共用训练、验证、分布式与日志
+│   ├── checkpointing.py           # checkpoint 原子保存与恢复
+│   ├── spd_conversion.py          # 旧版 SPD 权重转换
+│   └── policy.py                  # SPDInferencePolicy 推理接口
+├── abc_sim/
+│   ├── tianji_scene.py            # 机器人、桌面、锤子和相机的场景构建
+│   └── tianji_env.py              # 54 关节反馈、位置控制、接触和抬升判定
+├── scripts/
+│   ├── build_tianji_scene.py      # 构建 Tianji 抓锤场景
+│   └── convert_spd_checkpoint.py  # 旧版 checkpoint 转换入口
+├── tests/                         # 模型、数据、训练、推理、转换和仿真测试
+├── cache/                         # 本地数据、权重、场景等；不是随仓库发布的资产
+├── outputs/                       # rollout 视频和 summary.json
+└── deploy/                        # 上游 YAM 部署工具，不是 Tianji 真机控制器
+```
 
-The `abc-spd` branch additionally integrates a **Tianji/Wuji2 54-DoF SPD policy**
-through the existing `train.py --policy spd` entry point, based on upstream
-`cd4ca33`. See [SPD training and inference](abc_minimal/README.md#tianjiwuji2-spd)
-for the real-recording contract, paper recipe, missing-camera masks, and
-architecture assumptions. The branch also supports
-[Tianji CPU-MuJoCo simulation rollouts](abc_minimal/README.md#tianji-simulation-rollout)
-with trained SPD weights. It does not include an author-released SPD checkpoint
-or a qualified Tianji hardware-control adapter.
+详细参考：[训练与模型](abc_minimal/README.md#tianjiwuji2-spd)、
+[仿真环境](abc_sim/README.md#tianjiwuji2-embodiment)、
+[上游部署](deploy/README.md)。
 
-## Repo layout
+## SPD 模型与数据流
 
-This README covers setup, a short evaluation smoke test, and training. The package READMEs below hold the full reference for their areas.
+### 机器人与动作空间
 
-| Package | What it holds |
-| --- | --- |
-| [`abc_minimal/`](abc_minimal/README.md) | ABC models, dataloader, training loop, policy inference, episode tools |
-| [`abc_sim/`](abc_sim/README.md) | self-contained simulator: MuJoCo scenes, task catalogue, randomization, evaluators, Gym API, sim eval |
-| [`deploy/`](deploy/README.md) | real-robot deployment: local/remote inference, RTC, teleop, DAgger, recording |
-| [GELLO hardware](deploy/gello/README.md) | printable parts, bill of materials, and assembly guide |
+策略关节顺序固定为：
 
-`train.py`, `eval_policy.py`, `viz_episode.py`, `viz_policy.py`, and `prepare.py` at the root are the entrypoints; `scripts/` holds the data conversion utilities.
+| 部位 | 维数 | 单位 |
+| --- | ---: | --- |
+| 左臂 | 7 | rad |
+| 左手 | 20 | rad |
+| 右臂 | 7 | rad |
+| 右手 | 20 | rad |
+| 合计 | **54** | rad |
 
-## Setup
+模型输出是关节位置目标，不是力矩或末端位姿。
+数据加载器将采集器的源关节顺序映射为上述策略顺序；不能仅按长度拼接任意 54 个关节。
 
-The training and default GPU evaluation commands below target Linux with an
-NVIDIA GPU and a driver compatible with CUDA 12.8 (the pinned PyTorch build).
-Use Python 3.12. The reference DiT training run uses 8 H100/H200 GPUs with
-80 GB VRAM each; reduce the GPU count and per-GPU `--batch-size` for smaller
-machines. Minimum evaluation VRAM has not been established.
+### 模型结构
+
+```text
+顶部/腕部 RGB 图像 → 冻结 DINOv3 → 视觉特征
+                                      ↓
+关节位置 + 上一时刻实测位置 → 时序观测专家 → 各层 K/V
+                                                   ↓
+噪声动作块 → 动作专家 + Flow Matching / Euler 采样 → 8 × 54 关节目标
+                                                   ↓
+                         MuJoCo 位置伺服 → 实测反馈 → 下一控制时刻
+```
+
+默认隐藏维度 768、12 个注意力头、8 层配对专家；总参数 **224,277,558**，其中 DINO 冻结参数为 **85,669,632**。
+训练窗口包含 256 个观测时刻，控制时间为 30 Hz；图像每 8 个时刻更新，注意力因果窗口为 32 个时刻。
+推理默认使用 10 步 Euler 采样，每次产生 8 步动作。
+
+当前 SPD **不接收语言提示词**，行为来自示范数据及观测历史。
+`--task tianji_pick_hammer` 选择仿真场景与评分逻辑，并不是送入模型的文字指令。
+本实现依据 [SPD 论文](https://arxiv.org/html/2608.15917v1#A1.SS5) 将 56 关节适配为 54 关节，
+并明确记录了论文未完全指定部分的实现假设；不是经过作者代码核验的官方复现。
+
+## 环境安装
+
+### 系统要求
+
+- 推荐 **Linux + Python 3.12 + NVIDIA GPU**；包声明支持 Python ≥ 3.10。
+- Linux PyTorch 固定为 **2.11.0+cu128**，需要兼容 CUDA 12.8 的 NVIDIA 驱动。
+- MuJoCo 固定在 **3.8.x**，另包含上游所需的 MuJoCo Warp 依赖。
+- Tianji 路径使用 **CPU MuJoCo 动力学**；策略可用 CUDA，EGL 相机渲染需要相应的图形驱动。
+- 未建立通用的最低显存要求。先用 batch 1、不编译的配置验证，再按实际容量调整；不要套用上游 DiT 的 8 卡训练规模。
+
+以下命令在 Bash 中执行。Ubuntu / Debian 系统依赖：
 
 ```bash
-# Install uv if you don't have it.
+sudo apt-get update
+sudo apt-get install -y git curl ffmpeg libegl1 libgl1
+nvidia-smi
+```
+
+`libegl1` 不替代 NVIDIA EGL 驱动。如果无头渲染失败，需要安装与现有驱动版本匹配的 NVIDIA GL/EGL 软件包，
+不要照抄其他机器的驱动版本号。
+
+### 安装项目
+
+```bash
 curl -LsSf https://astral.sh/uv/install.sh | sh
-```
+export PATH="$HOME/.local/bin:$PATH"
 
-```bash
-# Install ffmpeg.
-sudo apt-get install -y ffmpeg     # on Linux
-```
-
-```bash
-git clone https://github.com/amazon-far/abc.git
-cd abc
-# Pin Python and create the project venv. uv reads pyproject.toml here.
+git clone --branch abc-spd https://github.com/suzhelearning/abc.git abc-spd
+cd abc-spd
 uv python pin 3.12
-uv sync
+uv sync --extra dev
 ```
 
-## Quick evaluation smoke test
+已有本地仓库时，在其根目录执行最后两条命令即可。下文所有命令均从仓库根目录运行；
+`uv run` 会使用该项目环境，不要直接借用另一个 checkout 的 Python 环境。
+SPD 训练和仿真不需要 `uv sync --extra deploy`，安装该 extra 也不会增加 Tianji 真机控制能力。
 
-After setup, download the bottles checkpoint (~8.1 GB), preview data, and its
-simulation assets, then run one short rollout on a single NVIDIA GPU:
+### 安装检查
 
 ```bash
-uv run prepare.py --checkpoint
-uv run eval_policy.py \
-    --checkpoint "${ABC_CACHE:-cache}/bottles_75k.pt" \
-    --num-worlds 1 --num-chunks 2 --no-fast-inference \
-    --save-video --video-every-n-actions 15
+uv run python -c "import torch, mujoco, h5py; print('torch:', torch.__version__, 'cuda:', torch.cuda.is_available()); print('mujoco:', mujoco.__version__)"
+uv run train.py --help
+uv run eval_policy.py --help
+uv run scripts/build_tianji_scene.py --help
 ```
 
-The checkpoint includes its vision backbone and normalization statistics;
-no separate DINO weight download is needed for this evaluation. The first
-launch compiles MJWarp CUDA kernels (approximately one minute); download and
-rollout times depend on your connection and GPU. This short run skips the
-optional inference compilation.
+计划使用 CUDA 时，第一条应显示 `cuda: True`。检查本身不会下载数据、加载 SPD checkpoint 或启动机器人。
 
-Expect `summary.json` and a `world_*.mp4` video under
-`outputs/sim_eval_put_plastic_bottles_in_bin/`. Completing the run checks
-checkpoint loading, rendering, and policy inference. Two action chunks are
-too short to measure task success; use the full [evaluation](#evaluation)
-instructions for that.
+## 数据与权重准备
 
-## Training
+### Tianji 录制数据
 
-First we need to download the requisite data (norm stats and either a sample or full data.)
-```bash
-uv run prepare.py            # preview (a few episodes of data, ~130MB)
-uv run prepare.py --full     # all data for bottles in bin (~35GB)
-uv run prepare.py --checkpoint  # add to also pull the pretrained 75k policy (~8.1GB)
-uv run prepare.py --sim-data sim_spell_abc  # one sim task's episodes + its assets (--sim-data-list to browse)
+准备采集器产生的一个完整集合，至少包含两个成功结束的 episode：
+
+```text
+TianjiData/
+├── dataset_config.json
+├── episode_001.h5
+└── episode_002.h5
 ```
 
-This populates the cache dir (default `cache/`, or `ABC_CACHE` if set) with:
+这是已有采集器的 schema v1，不是通用 HDF5 格式。关键约束：
 
-```
-cache/
-  norm_stats.json                       # state/action z-score stats
-  train_real/episode_<uuid>/{states_actions.bin, combined_camera-images-rgb.mp4, episode_metadata.json}
-  val_real/...
-  train_sim/...
-  val_sim/...
-```
+- `joint_unit=rad`、`policy_rate_hz=30`，54 个唯一源关节名。
+- 图像为 JPEG，解码颜色顺序为 RGB，声明尺寸 1280 × 720；JPEG quality 为 0–100 的整数。
+- `.h5` 必须已完成、具有 `success=true` 等合法头信息，摄像头组必须与配置一致；`.partial.h5` 不参与训练。
+- 相机名称为 `top`、`left_wrist`、`right_wrist` 的非空子集。缺失视角通过掩码处理，已声明但损坏或缺失的流仍报错。
+- 不直接混合不同采集契约的两相机和三相机集合。
 
-Set `ABC_CACHE=/path/to/cache` before running commands if you want the cache
-outside the repository.
+加载器按 30 Hz 因果对齐；默认关节最大样本年龄 150 ms、图像最大年龄 2 s。
+过期数据会切断窗口，完整 episode 按种子做约 80/20 划分，归一化仅拟合训练片段。
 
-:warning: Note: `prepare.py` does not download DINO weights. Review and follow the DINO license terms, then download the weights from [Meta](https://ai.meta.com/resources/models-and-libraries/dinov3-downloads/) or [Hugging Face](https://huggingface.co/facebook/dinov3-vitb16-pretrain-lvd1689m). Save the file as `dinov3_vitb16_pretrain_lvd1689m.pth` in the cache dir. :warning:
+| 训练字段 | 默认形状 | 含义 |
+| --- | --- | --- |
+| `state` | `[B,256,54]` | 归一化实测关节位置 |
+| `previous_actions` | `[B,256,54]` | 上一时刻实测位置，**不是控制命令** |
+| `actions` | `[B,32,8,54]` | 32 个锚点各自后续 8 步的实测位置 |
+| `images[camera]` | `[B,32,3,224,224]` | 等比例缩放、补边并归一化的图像 |
+| `camera_validity` | `[B,32,3]` | 顶部、左腕、右腕顺序的 bool 掩码 |
 
-### ABC-DiT Training
+仅训练不需要机器人 URDF 或仿真资产。`prepare.py` 的 ABC 数据下载流程不能替代 Tianji HDF5 数据准备。
+完整契约见 [Tianji recordings](abc_minimal/README.md#tianji-recordings-and-batch-contract)。
 
-The command to run training is below. Note that this is for single node training with 8 GPUs, change `nproc-per-node` if you want.
+### DINOv3 权重
 
-```bash
-uv run torchrun --standalone --nproc-per-node 8 train.py
-
-# Resume from a local checkpoint, including optimizer/scheduler and data stream position.
-uv run torchrun --standalone --nproc-per-node 8 train.py --resume-from cache/finetune_checkpoints/last.pt
-```
-The dataclass config is exposed as CLI flags; `uv run python train.py --help` shows training, optimizer, flow, CLIP asset, and model options. The default model config is the checkpoint-compatible ABC-DiT XL shape.
-
-If you pulled with `--full` above, this checkpoint is expected to work for the bottles in bin task in both sim and real. The performance should be similar to [this](assets/bottles_real.mp4).
-
-Training defaults in `abc_minimal/config.py` match the production reference finetune (lr 1e-4 with a 1k-step linear warmup, AdamW(0.9, 0.95), wd 0.01, grad clip 10, prefix conditioning max 8 with noise 0.05, 10% state masking, batch 90/GPU, 75k steps, hours-weighted 2-component mixture).
-
-If you have fewer GPUs than 8 you need to reduce nproc per node or if you have less than 80Gb of VRAM you may need to reduce `--batch-size`.  The above training yields ~2.6-3 iterations / sec on H100/H200. It achieves a training loss of ~`0.048` after 75k steps.  The DiT policy also supports a CLIP ViT-B/16 vision backbone (in place of DINOv3) via `--model.vision-backbone clip`.
-
-### ABC-VLA Training
-
-A diffusion-only port of the Gemma 3 VLA: Gemma 3 4B with SigLIP at 224x224, one
-selectable Gemma feature layer, QK-normalized learned-query pooling, a state token
-plus optional direct state conditioning, and a small AdaLN DiT head. FAST tokens
-and the alternative conditioners are not included. VLA training supports FSDP
-with the restrictions described below.
-
-Training from the Gemma base needs Google's `gemma_pytorch` checkpoint
-(`google/gemma-3/pyTorch/gemma-3-4b-pt` on Kaggle, under the Gemma Terms of Use);
-the Hugging Face format is not compatible. Select the policy with `--policy vla`:
+先阅读并接受 [DINOv3 许可与访问条件](https://huggingface.co/facebook/dinov3-vitb16-pretrain-lvd1689m)。
+获准访问后，可使用项目环境中的 Hugging Face CLI 下载：
 
 ```bash
-uv run torchrun --standalone --nproc-per-node 8 train.py \
-    --policy vla \
-    --vla-model.backbone.checkpoint /path/to/gemma3_4b_pt.pt \
-    --flow.num-diffusion-draws 4
+uv run hf auth login
+uv run hf download facebook/dinov3-vitb16-pretrain-lvd1689m \
+  model.safetensors config.json \
+  --local-dir cache/dinov3-vitb16
 ```
 
-The `--prompt.*` subtask and operator options apply to the VLA as to the DiT;
-neither has been validated for it. `--fsdp` shards parameters, gradients, and
-Adam state across the ranks instead of replicating them, roughly halving
-per-GPU memory on two GPUs. Launch with `torchrun --nproc-per-node` greater
-than 1; `--fsdp` is VLA-only and cannot be combined with `--compile-siglip`.
+官方 HF `config.json` 必须保留在 `model.safetensors` 同目录。加载器也支持原生 DINO `.pth`；
+本文命令统一使用 HF 格式。`prepare.py` 不下载 DINO 权重。
 
-### Finetuning from a released checkpoint
+SPD checkpoint **不内嵌冻结的 DINO 权重**，训练时记录 SHA-256，推理时必须提供同一份权重。
+不要把不同版本的 DINO 文件替换到已有 checkpoint 下。
 
-To finetune from a released checkpoint instead of training from scratch, download the parent and pass `--load-pretrained` (fresh optimizer, step 0).
-
-#### ABC-DiT Finetuning
+在同一个终端设置后续路径；将 `/absolute/path/...` 替换为自己机器上真实存在的路径：
 
 ```bash
-# Pulls cache/abc_dit_xl_200k_model.pt (~8.1 GB)
-uv run prepare.py --pretrained
-uv run train.py --load-pretrained
+export TIANJI_DATA=/absolute/path/to/TianjiData
+export DINO_WEIGHTS="$PWD/cache/dinov3-vitb16/model.safetensors"
+export SPD_RUN="$PWD/cache/tianji_spd"
 ```
 
-`--pretrained-ckpt-name` picks the checkpoint file inside the cache dir (default
-`abc_dit_xl_200k_model.pt`, which is what `--pretrained` downloads). Use
-`--model.vision-backbone clip` when the parent is a CLIP-DiT checkpoint; DINOv3
-is the default.
+## 训练与续训
 
-#### ABC-VLA Finetuning
-
-The same weights-only path works for VLA checkpoints and needs no Gemma base:
+### 单卡训练
 
 ```bash
-uv run prepare.py --vla-pretrained
-
-uv run train.py \
-    --policy vla \
-    --load-pretrained \
-    --pretrained-ckpt-name vla_abc130k_200000_v2.pt
+uv run train.py --policy spd \
+  --spd-data.root "$TIANJI_DATA" \
+  --spd-data.dino-checkpoint "$DINO_WEIGHTS" \
+  --output-dir "$SPD_RUN" \
+  --batch-size 1 --num-workers 0 --no-compile \
+  --flow.max-action-prefix 0 --flow.mask-state-ratio 0 \
+  --optim.learning-rate 0.001 --optim.weight-decay 0.1 \
+  --optim.lr-warmup-steps 0 \
+  --train-steps 10000 --log-every 10 \
+  --val-every 250 --val-batches 16 \
+  --ckpt-every 100 --keep-last-checkpoint-only
 ```
 
-`--vla-pretrained` fetches the recommended `abc130k` step-200000 parent, verifies
-its checksum, and installs the assets for its five sim tasks;
-`--vla-pretrained-family {abc130k,200k}` and `--vla-pretrained-step
-{50000,100000,200000}` select the others (the `200k` family trained on xdof only).
-The v2 files embed norm stats and architecture metadata, which is checked against
-the CLI config before strict loading; `--resume-from` is only for a stateful
-continuation.
+**不要省略 `--policy spd`**：默认策略仍是 ABC-DiT。上述命令显式关闭 SPD 不支持的动作前缀和状态 dropout，
+采用 Muon/AdamW、常量学习率和默认半衰期 20 步的 EMA。batch 1 是容量起点，不是收敛或成功率保证。
 
-**Multi-node training, the episode data format, and prompt conditioning options
-are documented in the [abc_minimal README](abc_minimal/README.md).**
+首次只检查链路时，将上述命令的 `--train-steps` 改为 `1`、`--val-every` 和 `--val-batches` 改为 `1`，
+并使用单独的输出目录；这仍运行完整默认模型，不是轻量假数据测试。
+训练产物包括 `last.pt` 和 `run_metadata.json`。只保留最后一个 checkpoint 时，原子替换仍需要另一个文件的临时空间。
 
-## Viewing the Sim Data
+### 续训与新任务初始化
 
-To download and view particular tasks from the sim data, and visualise the episodes, use the following
+在原训练命令中追加以下参数可恢复中断的训练：
 
 ```bash
-uv run prepare.py --sim-data-list # list possible tasks
-uv run prepare.py --sim-data conveyor_pick # download one from the list
-uv run viz_episode.py --root cache/train_sim --port 8080 # visualise data
+--resume-from "$SPD_RUN/last.pt"
 ```
 
-The replay modes (pose playback vs physics re-simulation) are described in the
-[abc_minimal README](abc_minimal/README.md#visualizing-episodes-and-policies).
+这是追加参数，不是独立 Shell 命令。续训恢复优化器、调度器、EMA、随机状态和采样进度。
+保持原始数据、划分、归一化、优化配置和 batch/world 拓扑不变；若训练已完成，需要提高目标 `--train-steps` 才会继续更新。
 
-## Evaluation
-
-`eval_policy.py` evaluates a checkpoint on the `abc_sim/` task catalogue: one
-you trained yourself (`cache/finetune_checkpoints/last.pt`) or a released one:
+要用兼容 SPD 权重开始一个新训练，而不是恢复优化器，在完整训练命令中改用：
 
 ```bash
-# bottles_75k.pt: the 75k-step bottles-only policy, with norm_stats.json and the preview tar.
-uv run prepare.py --checkpoint
-
-# abc_dit_xl_200k_model.pt: the multi-task DiT parent.
-uv run prepare.py --pretrained
-
-# vla_abc130k_200000_v2.pt: the VLA parent, with its five tasks' assets.
-uv run prepare.py --vla-pretrained
-
-# A per-task finetune at its recommended step, sha-verified, with its eval command
-# printed. --sim-checkpoint-list shows the catalogue with results;
-# --sim-checkpoint-full-state fetches the ~24 GB training-state file instead.
-uv run prepare.py --sim-checkpoint pour
+--load-pretrained --pretrained-ckpt-name /absolute/path/to/spd/last.pt
 ```
 
-Every download installs the sim assets its checkpoint needs and prints eval and
-viewer commands. Both tools use the prompt each checkpoint trained under, so
-`--sim.prompt` and `--sim.checkpoint` are only for overrides.
+新训练应选择新的输出目录。不能把 DiT/VLA checkpoint 当作 SPD 权重使用。
+启用 W&B 时，在终端完成 `uv run wandb login`，再追加 `--log-wandb --wandb-project spd`；
+按自己的账户设置 `WANDB_ENTITY`，不要把令牌写入代码。SPD 请求启用 W&B 后，初始化失败会终止训练。
 
-To watch a policy live in a viser window at `localhost:8080`, prepare its task
-bundle once (the assets plus the recommended model-only checkpoint, no episode
-data), then select the task in the viewer. Every task has a DiT bundle and a
-`vla_` bundle; `--sim-bundle-list` shows all of them with their results, and
-`--sim-force` refreshes a cached manifest:
+多进程可用 `uv run torchrun --standalone --nproc-per-node N train.py` 替换命令入口并保留 SPD 参数。
+每个 rank 必须看到完整且未变的同一集合；不使用 ABC 的节点分片缓存。
+已记录两进程 CPU/Gloo 验证，但未验证多 GPU 吞吐；SPD 不支持 `--fsdp`，该选项仅用于 VLA。
+
+## 策略推理接口
+
+`abc_minimal.policy.SPDInferencePolicy` 提供物理单位的有状态预测接口，不直接驱动执行器。
+构造时提供 checkpoint、`SPDPolicyConfig` 和 device，匹配训练模型配置及 DINO 文件；
+配置必须关闭 `fast_inference`，并保持 `rtc_prefix_length=None`。默认加载 EMA。
+
+| 接口 | 用法 |
+| --- | --- |
+| `observe(obs)` | 每个控制时刻追加一次实测反馈；模型按 stride 8 使用图像 |
+| `infer()` | 基于当前缓存预测 `[8,54]`，批量时为 `[B,8,54]`，单位 rad |
+| `infer(obs)` | 先追加一次该观测，再采样；不要和同一时刻的 `observe(obs)` 重复使用 |
+| `reset()` | 每个 episode 开始前清除历史 |
+
+`obs` 包含 `state`、`previous_actions`（均为 `[54]` 或 `[B,54]` 的实测 rad 值）、
+`images`（CHW/BCHW RGB，uint8 或 `[0,1]` 浮点）及 `camera_validity`（bool `[3]` 或 `[B,3]`）。
+没有掩码时必须提供全部三路相机；默认两相机输入应明确使用 `[True, True, False]`。
+接口内部执行预处理，不要再次传入训练时已归一化的图像或关节值。
+
+不必自己编写硬件循环即可验证策略，使用下面的仿真入口。
+
+## Tianji 仿真使用
+
+### 准备外部资产
+
+除了 SPD checkpoint 和 DINO，还需要：
+
+| 资产 | 要求 |
+| --- | --- |
+| 机器人 MJCF/XML | 已可加载的 Tianji/Wuji2 机器人模型及其引用的 mesh/include、关节、位置执行器和相机 |
+| 匹配的 URDF | 用于解析策略关节名称、位置范围和目标变化率限制 |
+| 锤子 OBJ | 用于构建抓锤场景的外部扫描网格 |
+| 初始姿态 JSON | `qpos` 为 54 个 rad 数值，`joint_names` 与策略顺序匹配，姿态在 URDF 限位内 |
+
+这些资产**不随本分支发布**，`build_tianji_scene.py` 也不是 URDF 到完整机器人 MJCF 的转换器。
+必须先提供可用的机器人模型；初始姿态建议来自对应示范的实测状态，不要随意填零。
 
 ```bash
-uv run prepare.py --sim-bundle-list
-uv run prepare.py --sim-bundle put_plastic_bottles_in_bin
-uv run prepare.py --sim-bundle vla_lego_blocks_sorting
-uv run viz_policy.py --sim.task put_plastic_bottles_in_bin --port 8080
+export TIANJI_ROBOT_XML=/absolute/path/to/unified_plant.xml
+export TIANJI_URDF=/absolute/path/to/tianji_wuji2.urdf
+export HAMMER_MESH=/absolute/path/to/hammer_m.obj
+export TIANJI_INITIAL_QPOS=/absolute/path/to/initial_qpos.json
+export SPD_CHECKPOINT="$SPD_RUN/last.pt"
 ```
 
-![](assets/sim_eval.gif)
+### 旧版 SPD 权重转换（仅旧模型需要）
 
-To run the evaluation, download the sim assets once (`uv run prepare.py --sim`;
-the first launch also compiles MJWarp's CUDA kernels, ~1 min):
+当前训练输出可以直接推理。若持有受支持的旧版 `spd-paired-kv-v2` checkpoint，先转换：
 
 ```bash
-# 20 worlds, save a video of each rollout, log per-chunk progress.
-uv run eval_policy.py \
-    --checkpoint cache/bottles_75k.pt \
-    --num-worlds 20 \
-    --save-video --video-every-n-actions 15 --log-every-chunk
+uv run scripts/convert_spd_checkpoint.py \
+  --source-path /absolute/path/to/legacy/last.pt \
+  --output-path cache/tianji_converted/last.pt \
+  --dino-checkpoint "$DINO_WEIGHTS"
 
-# Output: $REPO/outputs/sim_eval_put_plastic_bottles_in_bin/
-#   summary.json     — success_rate, num_success, mean_reward,
-#                      mean_max_progress, mean_max_bottles_in_bin
-#   world_*.mp4      — per-world rollout videos (with --save-video)
-
-# 100 worlds stepped together in MJWarp physics (see the abc_sim README).
-uv run eval_policy.py \
-    --checkpoint cache/bottles_75k.pt \
-    --num-worlds 100 --parallel-worlds 100 \
-    --randomization '{"bottle_count": 6, "randomize_variants": false, "randomize_scales": false}'
+export SPD_CHECKPOINT="$PWD/cache/tianji_converted/last.pt"
 ```
 
-Any catalogue task is selected by name with `--task`. The task list, eval
-flags, prompt defaults, and the released checkpoints' expected numbers are all
-documented in the [abc_sim README](abc_sim/README.md#sim-eval).
+仅加载可信来源的 checkpoint，旧格式包含 pickle。转换器拒绝覆盖已有目标文件。
+转换结果为 **weights-only**：支持推理或 `--load-pretrained` 新训练，不支持 `--resume-from`；
+旧优化器状态不会迁移。转换范围及数值对照见 [转换说明](abc_minimal/README.md#migrate-the-already-trained-weights)。
 
-## Real-robot deployment
-
-The deployment stack, including RTC, teleoperation, and recording, is
-documented in [`deploy/README.md`](deploy/README.md). Install its optional
-hardware dependencies with `uv sync --extra deploy`.
-
-## Episode exports & training data format
-
-The quickstart real-data download covers the bottles task; simulation data for
-additional tasks is available through `prepare.py --sim-data-list`. To prepare
-other real-data tasks, the ABC-130k MCAPs are hosted on Hugging Face at
-[`XDOF/ABC-130k`](https://huggingface.co/datasets/XDOF/ABC-130k) (the dataset
-is gated, so accept access on the dataset page and set `HF_TOKEN`). Download
-all MCAPs for one task and convert them in place:
+### 构建抓锤场景
 
 ```bash
-uv run scripts/export_hf_task.py --task organize_the_condiment_bottles
+uv run scripts/build_tianji_scene.py \
+  --robot-xml "$TIANJI_ROBOT_XML" \
+  --hammer-mesh "$HAMMER_MESH" \
+  --output cache/tianji_sim/pick_hammer_views.xml \
+  --initial-qpos-path "$TIANJI_INITIAL_QPOS" \
+  --fit-wrist-cameras
 ```
 
-The episode format the trainer reads, the local MCAP converter, multi-node
-sharded downloads, and subtask/operator conditioning are documented in the
-[abc_minimal README](abc_minimal/README.md#training-data).
+构建器保留机器人碰撞、惯量和伺服配置，添加桌面及锤子，输出场景 XML 和相邻 JSON 说明。
+默认桌高 0.90 m、锤子质量 0.30 kg，接触几何与惯量为明确的仿真假设。
+`--fit-wrist-cameras` 按初始姿态选择固定腕部相机安装位姿，不是标定真机外参，也不会在运行时跟踪物体；
+省略该选项可保留源相机安装位姿。
+
+### 闭环评估与视频
+
+```bash
+MUJOCO_GL=egl uv run eval_policy.py \
+  --checkpoint "$SPD_CHECKPOINT" \
+  --policy spd --embodiment tianji_wuji2 --task tianji_pick_hammer \
+  --tianji.model-path cache/tianji_sim/pick_hammer_views.xml \
+  --tianji.urdf-path "$TIANJI_URDF" \
+  --tianji.initial-qpos-path "$TIANJI_INITIAL_QPOS" \
+  --spd-dino-checkpoint "$DINO_WEIGHTS" \
+  --camera-backend mujoco --camera-height 360 --camera-width 640 \
+  --no-rtc --no-fast-inference --prefix-length 0 --execute-chunk-dim 8 \
+  --num-worlds 1 --num-chunks 16 --device cuda \
+  --save-video --log-every-chunk --output-dir outputs/tianji_spd
+```
+
+这里 `--device cuda` 用于策略，`--camera-backend mujoco` 对应 Tianji 支持的渲染路径，动力学仍由 CPU MuJoCo 执行。
+不要启用 DiT 的 RTC、CUDA-graph 快速推理或 MJWarp 并行世界参数。
+`--device cpu` 可改用 CPU 策略推理，但不意味着 EGL 渲染不再需要图形环境。
+
+默认参与策略的相机为 `top,left_wrist`，视频可显示三路相机。
+只有 checkpoint 训练来源包含右腕视角时，才可追加 `--tianji.active-cameras top left_wrist right_wrist`；
+视频中出现右腕画面，不代表模型接受过右腕图像训练。
+
+输出位于 `outputs/tianji_spd/`：
+
+- `world_000.mp4`：闭环 rollout 视频。
+- `summary.json`：任务结果、物理步长、接触/抬升、跟踪误差和目标裁剪等。
+
+16 个动作块、每块 8 步对应 128 个控制时刻，约 4.267 秒仿真时间。
+成功判据为抬升至少 0.05 m 且手/物体接触持续 6 个控制时刻；地面或手臂接触不计入。
+每个 episode 重置到提供的固定场景，并清空策略历史；不使用 YAM 的场景随机化。
+
+## 验证与已知限制
+
+```bash
+MUJOCO_GL=egl uv run python -m pytest -q
+```
+
+仓库已有验证覆盖实际 HDF5 数据训练更新、EMA 保存/重载、缺失相机掩码、续训一致性及仿真反馈。
+最近一次上游合并后的现有测试结果为 **97 passed**；该结果不等于策略收敛或真机验证。
+
+已有完整模型 rollout 记录执行了 128 个控制时刻，没有 BADQPOS/BADQVEL/BADQACC 事件，
+但**没有抬起锤子**。30 Hz 指仿真控制时间，不是已经证明的墙钟实时性能。
+相机未标定、接触近似、碰撞网格编译警告及真实到仿真的视觉差异限制了结果解释。
+详细历史记录见 [验证](abc_minimal/README.md#verification) 和 [仿真结果](abc_minimal/README.md#run-the-trained-model)。
+
+**不要将 SPD 输出直接接入上游 YAM 控制器。** `deploy/deploy_policy.py`、策略服务器及现有 YAM 交互 viewer 会拒绝 SPD。
+本项目尚无经过验证的 Tianji 硬件控制适配器，仿真位置/目标变化率限制不构成真机安全认证。
+
+## 常见问题
+
+| 问题 | 检查方式 |
+| --- | --- |
+| 下载 DINO 返回 401/403 | 在模型页面接受条款并取得权限，再登录有访问权的 HF 账户 |
+| DINO SHA-256 不匹配 | 使用训练时同一份权重，不能仅靠文件名判断 |
+| 找不到 `abc_sim` / `abc_minimal` | 在本仓库根目录完成 `uv sync --extra dev`，使用本项目的 `uv run` |
+| `libtorchcodec` / FFmpeg 共享库加载失败 | 安装系统 FFmpeg 共享库；检查是否混用了其他 Conda/venv 的库路径。Tianji HDF5 JPEG 解码不走 TorchCodec，但 ABC MP4 加载会使用它 |
+| CUDA 不可用或 EGL 初始化失败 | 分别检查 PyTorch/驱动和 NVIDIA GL/EGL；只安装 CUDA 计算运行时不能保证相机渲染 |
+| 显存不足 | 从 batch 1、`--no-compile` 开始；可减小 `--spd-model.dino-frame-batch-size`，但不保证任意显卡都能运行完整模型 |
+| 数据无法形成有效窗口 | 检查 episode 数量、时间戳、流过期和采集 schema；不要通过伪造帧或掩码绕过损坏数据 |
+| 旧模型无法续训 | 转换的权重不含可恢复的优化器状态，使用 `--load-pretrained` 新训练 |
+| 运行正常却没有抓起锤子 | 执行链路验证不等于任务成功；结合训练覆盖、相机/场景一致性、接触和跟踪指标分析 |
+
+## 上游 ABC 功能
+
+本分支仍保留 ABC-DiT、ABC-VLA、原有数据转换和 YAM 仿真/部署。
+上游最新的逐帧 `prompt_timeline` 修复用于 ABC 的语言条件数据路径，不直接改变无语言条件的 SPD。
+
+- [ABC 项目与论文](https://abc.bot)、[上游代码及完整 ABC 快速入门](https://github.com/amazon-far/abc)。
+- [ABC 数据格式、导出和训练参考](abc_minimal/README.md)。
+- [YAM 任务目录、评估与渲染](abc_sim/README.md)。
+- [YAM 真机部署与遥操作](deploy/README.md)。
+
+下方保留上游第三方许可与引用信息；Tianji 外部数据、机器人和扫描资产还需遵守各自来源的授权条件。
 
 ## Licenses
 
